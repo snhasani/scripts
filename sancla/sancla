@@ -18,46 +18,49 @@ set -euo pipefail
 
 # --- BLOCK: case-insensitive substring patterns on the var NAME → unset --------
 BLOCK=(
-  TOKEN SECRET PASSWORD PASSWD PASSPHRASE
-  API_KEY APIKEY ACCESS_KEY SECRET_KEY PRIVATE_KEY
-  CREDENTIAL AUTH_TOKEN SESSION_KEY
+	TOKEN SECRET PASSWORD PASSWD PASSPHRASE
+	API_KEY APIKEY ACCESS_KEY SECRET_KEY PRIVATE_KEY
+	CREDENTIAL AUTH_TOKEN SESSION_KEY
 )
 
 # --- KEEP: exact names kept even if they match BLOCK (the exceptions) ----------
 KEEP=(
-  # OPENAI_API_KEY
+	# OPENAI_API_KEY
 )
 # Per-launch extra exceptions:  SANCLA_KEEP="OPENAI_API_KEY" sancla
 if [ -n "${SANCLA_KEEP:-}" ]; then
-  # shellcheck disable=SC2206
-  KEEP+=(${SANCLA_KEEP})
+	# shellcheck disable=SC2206
+	KEEP+=(${SANCLA_KEEP})
 fi
 
-block_re="$(IFS='|'; printf '%s' "${BLOCK[*]}")"
+block_re="$(
+	IFS='|'
+	printf '%s' "${BLOCK[*]}"
+)"
 keep_list=" ${KEEP[*]:-} "
 
 # Strip secret-looking names from the current env (except KEEP). unset here
 # affects this shell, so the exec'd claude inherits the cleaned environment.
 stripped=()
 while IFS= read -r name; do
-  case "$keep_list" in *" $name "*) continue ;; esac      # explicit keep wins
-  if printf '%s' "$name" | grep -qiE "$block_re"; then
-    unset "$name" 2>/dev/null || true
-    stripped+=("$name")
-  fi
+	case "$keep_list" in *" $name "*) continue ;; esac # explicit keep wins
+	if printf '%s' "$name" | grep -qiE "$block_re"; then
+		unset "$name" 2>/dev/null || true
+		stripped+=("$name")
+	fi
 done < <(env | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' | cut -d= -f1)
 
 # Debug: names only (never values), then exit without launching.
 if [ "${SANCLA_DEBUG:-}" = "1" ]; then
-  printf 'stripped: %s\n' "${stripped[*]:-<none>}"
-  printf 'kept-exc: %s\n' "${KEEP[*]:-<none>}"
-  exit 0
+	printf 'stripped: %s\n' "${stripped[*]:-<none>}"
+	printf 'kept-exc: %s\n' "${KEEP[*]:-<none>}"
+	exit 0
 fi
 
 claude_bin="$(command -v claude || true)"
 if [ -z "$claude_bin" ]; then
-  printf 'sancla: claude not found on PATH\n' >&2
-  exit 127
+	printf 'sancla: claude not found on PATH\n' >&2
+	exit 127
 fi
 
 exec "$claude_bin" "$@"

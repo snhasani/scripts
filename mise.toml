@@ -1,0 +1,47 @@
+[tools]
+shfmt = "3.13.1"
+shellcheck = "0.11.0"
+lefthook = "2.1.10"
+
+# Shell scripts are found by shfmt itself (shebang + *.sh), never hand-listed, so
+# a new tool needs no wiring here. bin/ holds only PATH symlinks to entrypoints —
+# excluded so we format/lint each script once, at its real path, not through the link.
+[tasks.fmt]
+description = "Format shell scripts (shfmt -w). No args: whole repo. Args (paths): only those — used by the pre-commit hook to format staged files."
+run = '''sh -c '
+files=$(shfmt -f "${@:-.}" | grep -v "^\(\./\)\?bin/")
+[ -n "$files" ] || { echo "no shell files"; exit 0; }
+printf "%s\n" "$files" | {
+	rc=0
+	while IFS= read -r f; do shfmt -w "$f" || rc=1; done
+	exit "$rc"
+}
+' fmt'''
+
+[tasks.lint]
+description = "Lint every shell script (shellcheck)"
+run = '''
+files=$(shfmt -f . | grep -v '^\(\./\)\?bin/')
+[ -n "$files" ] || { echo "no shell files"; exit 0; }
+printf '%s\n' "$files" | {
+	rc=0
+	while IFS= read -r f; do shellcheck "$f" || rc=1; done
+	exit "$rc"
+}
+'''
+
+[tasks.test]
+description = "Run every *.smoke.sh with bash"
+run = '''
+find . -name '*.smoke.sh' -not -path './.git/*' -not -path './bin/*' -print | sort | {
+	rc=0
+	found=0
+	while IFS= read -r t; do
+		found=1
+		echo "== $t =="
+		bash "$t" || rc=1
+	done
+	[ "$found" -eq 1 ] || echo "no smoke tests found"
+	exit "$rc"
+}
+'''

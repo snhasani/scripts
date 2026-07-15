@@ -1,0 +1,10 @@
+# Format staged shell scripts before commit, folding the result into the same
+# commit (stage_fixed) so what lands is always formatted. `mise run fmt` uses the
+# pinned shfmt and selects shell files by shebang + *.sh — extensionless tool
+# entrypoints are covered and bin/ symlinks skipped; non-shell staged files no-op.
+# Lint and test run in CI, deliberately not here.
+pre-commit:
+  commands:
+    fmt:
+      run: mise run fmt -- {staged_files}
+      stage_fixed: true

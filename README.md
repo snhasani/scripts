@@ -33,3 +33,24 @@ mkdir mytool
 # add mytool/mytool (+x), mytool/README.md, tests
 ln -s ../mytool/mytool bin/mytool
 ```
+
+## Development
+
+Tooling is pinned with [mise](https://mise.jdx.dev) and formatting runs on commit
+via [lefthook](https://lefthook.dev):
+
+```sh
+mise install     # shfmt, shellcheck, lefthook at the versions in mise.toml
+lefthook install # install the pre-commit hook
+```
+
+Tasks (shell scripts are selected by shebang + `*.sh`; `bin/` symlinks are skipped):
+
+```sh
+mise run fmt   # format in place (shfmt -w)
+mise run lint  # shellcheck
+mise run test  # run every *.smoke.sh with bash
+```
+
+`pre-commit` formats staged shell scripts with `mise run fmt` and re-stages them,
+so what gets committed is always formatted. Lint and test run in CI.
