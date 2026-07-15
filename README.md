@@ -18,7 +18,7 @@ bin/            # on PATH — relative symlinks to entrypoints only
 ## Install
 
 ```sh
-git clone <this-repo> ~/workspace/lab/scripts
+git clone git@github.com:snhasani/scripts.git ~/workspace/lab/scripts
 # add to your shell rc (config, keep it in your dotfiles):
 export PATH="$HOME/workspace/lab/scripts/bin:$PATH"
 ```
