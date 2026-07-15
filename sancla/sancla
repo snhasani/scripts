@@ -16,6 +16,8 @@
 
 set -euo pipefail
 
+# ci-test: temporary line to exercise the changed-tool smoke-test workflow (revert)
+
 # --- BLOCK: case-insensitive substring patterns on the var NAME → unset --------
 BLOCK=(
   TOKEN SECRET PASSWORD PASSWD PASSPHRASE
