@@ -1,0 +1,12 @@
+# zizmor policy — https://docs.zizmor.sh/configuration/
+#
+# unpinned-uses: require a pinned ref, allow version tags (ref-pin) rather than
+# forcing full commit SHAs (hash-pin). This repo has no Dependabot, so SHA pins
+# would rot silently and unnoticed; version tags on trusted actions are the
+# pragmatic posture. ref-pin still forbids the real hazard — mutable branch refs
+# like @main. Tighten to hash-pin here if/when automated pin-bumping is added.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        "*": ref-pin

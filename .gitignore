@@ -1,0 +1,31 @@
+# Scratch / working area — never committed (holds session PLAN/WAYPOINT, db dumps, notes).
+tmp/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*.iml
+
+# direnv
+.envrc
+.direnv/
+
+# mise — machine-local overrides and install state (shared config is tracked).
+mise.local.toml
+.mise.local.toml
+.mise/
