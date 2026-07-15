@@ -1,0 +1,75 @@
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so we can diff against the base
+
+      - name: Run changed tools' smoke tests
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -uo pipefail
+
+          # Resolve the set of changed files for this event.
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            # Three-dot diff against the merge-base of the PR base and HEAD, so
+            # only files this PR actually touches count (not base-branch drift).
+            git fetch --no-tags origin "$BASE_REF" >/dev/null 2>&1 || true
+            changed=$(git diff --name-only "origin/${BASE_REF}...HEAD")
+          else
+            # push: diff the pushed range. github.event.before is all-zeros on the
+            # first push of a branch (no prior sha on the remote to compare with).
+            if [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
+              if git rev-parse HEAD~1 >/dev/null 2>&1; then
+                changed=$(git diff --name-only HEAD~1..HEAD)
+              else
+                # Root commit: no parent exists, so treat every file as changed.
+                changed=$(git ls-tree --name-only -r HEAD)
+              fi
+            else
+              changed=$(git diff --name-only "${BEFORE_SHA}..HEAD")
+            fi
+          fi
+
+          # Map changed files to unique top-level dirs. Skip repo-root files
+          # (NF>1) and dotfile dirs like .github (they are not tools).
+          dirs=$(printf '%s\n' "$changed" \
+            | awk -F/ 'NF>1 && $1 !~ /^\./ { print $1 }' \
+            | sort -u)
+
+          failed=0
+          ran=0
+          while IFS= read -r d; do
+            [ -z "$d" ] && continue
+            shopt -s nullglob
+            tests=("$d"/*.smoke.sh)
+            shopt -u nullglob
+            [ ${#tests[@]} -eq 0 ] && continue # changed dir carries no smoke test
+            for t in "${tests[@]}"; do
+              printf '::group::%s\n' "$t"
+              if bash "$t"; then
+                printf 'PASS %s\n' "$t"
+              else
+                printf 'FAIL %s\n' "$t"
+                failed=1 # collect, keep going, fail at the end
+              fi
+              ran=$((ran + 1))
+              printf '::endgroup::\n'
+            done
+          done <<< "$dirs"
+
+          if [ "$ran" -eq 0 ]; then
+            echo "No changed tool has smoke tests; nothing to run."
+          fi
+          exit "$failed"
