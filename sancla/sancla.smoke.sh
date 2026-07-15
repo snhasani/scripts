@@ -35,15 +35,19 @@ printf 'smoke: %s\n' "$SANCLA"
 
 # 1. a secret-looking var is stripped
 out=$(dbg FOO_TOKEN=x)
-has "$(strip_of "$out")" FOO_TOKEN &&
-	ok "strips secret-looking name (FOO_TOKEN)" ||
+if has "$(strip_of "$out")" FOO_TOKEN; then
+	ok "strips secret-looking name (FOO_TOKEN)"
+else
 	bad "strips secret-looking name (FOO_TOKEN)" "$(strip_of "$out")"
+fi
 
 # 2. a plain var passes through (not stripped)
 out=$(dbg PLAIN_VAR=x)
-has "$(strip_of "$out")" PLAIN_VAR &&
-	bad "passes plain name through (PLAIN_VAR)" "$(strip_of "$out")" ||
+if has "$(strip_of "$out")" PLAIN_VAR; then
+	bad "passes plain name through (PLAIN_VAR)" "$(strip_of "$out")"
+else
 	ok "passes plain name through (PLAIN_VAR)"
+fi
 
 # 3. mixed: secret stripped, sibling plain var kept, in one run
 out=$(dbg SECRET_X=1 NORMAL_Y=1)
@@ -64,9 +68,11 @@ fi
 
 # 5. matching is case-insensitive (lowercase var name)
 out=$(dbg authtoken=1)
-has "$(strip_of "$out")" authtoken &&
-	ok "case-insensitive match (authtoken)" ||
+if has "$(strip_of "$out")" authtoken; then
+	ok "case-insensitive match (authtoken)"
+else
 	bad "case-insensitive match (authtoken)" "$(strip_of "$out")"
+fi
 
 # 6. SANCLA_KEEP exception spares a matching var
 out=$(dbg FOO_TOKEN=x SANCLA_KEEP=FOO_TOKEN)
