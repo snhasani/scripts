@@ -54,3 +54,9 @@ mise run test  # run every *.smoke.sh with bash
 
 `pre-commit` formats staged shell scripts with `mise run fmt` and re-stages them,
 so what gets committed is always formatted. Lint and test run in CI.
+
+## Releases
+
+Versioning is automated with [release-please](https://github.com/googleapis/release-please-action):
+[conventional commits](https://www.conventionalcommits.org) on `main` drive a release PR that
+maintains `CHANGELOG.md` and the version bump — merging it cuts the git tag and GitHub Release.
