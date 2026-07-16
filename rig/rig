@@ -12,8 +12,13 @@
 # detect → draft → apply — walked from an ordered registry by the main loop,
 # which supplies the shared confirm phase (auto-yes when headless). Idempotency
 # is per-section: the config block is guarded by its markers (grep → replace in
-# place, else append); scratch is guarded by `git check-ignore`. New sections
-# (story 2: tracker, triage, domain) are a function trio + one registry entry.
+# place, else append); scratch is guarded by `git check-ignore`; domain files by
+# existence. A new section is a function trio + one registry entry.
+#
+# The rig:config block is a single marker-guarded region assembled by one pure
+# function (config_block): tracker line + optional triage map. The block-owning
+# sections (agent-file, tracker, triage) each re-upsert that deterministic
+# content, so order and repetition are irrelevant — the final bytes are fixed.
 #
 # Anchoring: all paths resolve under `git rev-parse --show-toplevel`; rig
 # refuses to run outside a git repo. --dry-run prints the intended edits and
@@ -25,15 +30,21 @@ set -euo pipefail
 CONFIG_OPEN='<!-- rig:config -->'
 CONFIG_CLOSE='<!-- /rig:config -->'
 SCRATCH_DIR='.tmp'
+# Footprint above the scratch ignore line so a reader knows rig added it and why
+# (parity with the marker-wrapped config block and the domain-seed comment).
+SCRATCH_NOTE='# rig: agent-skills scratch root (git-ignored ephemeral state)'
 
 # --- ordered section registry ------------------------------------------------
-# Story 2 inserts `tracker triage` after agent-file and appends `domain`.
-SECTIONS=(agent-file scratch)
+# tracker/triage refine the config block agent-file writes; domain scaffolds.
+SECTIONS=(agent-file tracker triage scratch domain)
 
 # --- flags / state -----------------------------------------------------------
 ASSUME_YES=0
 DRY_RUN=0
 DEBUG=0
+# Per-section skip reason: a section returns non-zero from detect (nothing to
+# do) and may set this to explain why; the main loop prints and clears it.
+SKIP_MSG=""
 
 # --- logging (names/decisions only, colored like the toolbox reference) ------
 info() { printf '%s\n' "$*"; }
@@ -55,11 +66,24 @@ options:
       --dry-run   print the intended edits, write nothing
 
 env (detected defaults; override to force):
-  RIG_AGENT_FILE  agent file to use/create (default: AGENTS.md, else CLAUDE.md)
+  RIG_AGENT_FILE        agent file to use/create, must resolve within the repo (default: AGENTS.md, else CLAUDE.md)
+  RIG_TRACKER           tracker backend: github | shortcut (default: github)
+  RIG_REPO              repo slug for the github backend (default: from origin remote)
+  RIG_SHORTCUT_WORKSPACE  workspace for the shortcut backend
+  RIG_SKILLS_DIR        skills collection to probe for a `triage` skill (default: ~/skills)
+  RIG_TRIAGE            force triage on/off: 1 | 0 (default: auto-detect via skills dir)
 
-Writes a marker-wrapped `rig:config` block into the agent file and provisions a
-git-ignored scratch root (.tmp/). Idempotent and non-destructive: a re-run adds
-no duplicate blocks and leaves content outside rig's markers byte-for-byte.
+Sections (registry order): agent-file, tracker, triage, scratch, domain.
+  agent-file  ensure AGENTS.md/CLAUDE.md, upsert the marker-wrapped rig:config block
+  tracker     write tracker: { backend, repo|workspace } into rig:config (case seam)
+  triage      only when a `triage` skill is present: write triage.labels into rig:config
+  scratch     provision + git-ignore the .tmp/ scratch root
+  domain      scaffold the domain-doc layout (single- or multi-context)
+
+The Shortcut API token is read from $SHORTCUT_API_TOKEN at skill-runtime and is
+NEVER written into the config block. Idempotent and non-destructive: a re-run
+adds no duplicate keys or files and leaves content outside rig's markers/files
+byte-for-byte.
 EOF
 }
 
@@ -141,6 +165,38 @@ upsert_block() {
 	rm -f "$blk" "$tmp"
 }
 
+# resolve_path: absolute, `.`/`..`-normalized form of PATH, taken relative to
+# $ROOT (already cd'd there) when not absolute. Purely lexical — no filesystem
+# access — so it resolves a not-yet-created file and cannot be fooled into
+# treating `/rootsibling` as inside `/root`. Used to keep every touched path
+# anchored under the repo root.
+resolve_path() {
+	local p="$1" seg out='' segs
+	case "$p" in
+	/*) ;;
+	*) p="$ROOT/$p" ;;
+	esac
+	IFS='/' read -ra segs <<<"$p"
+	for seg in "${segs[@]}"; do
+		case "$seg" in
+		'' | .) ;;
+		..) out="${out%/*}" ;;
+		*) out="${out}/${seg}" ;;
+		esac
+	done
+	printf '%s' "${out:-/}"
+}
+
+# path_under_root: true IFF PATH normalizes to $ROOT or a descendant of it.
+path_under_root() {
+	local abs
+	abs="$(resolve_path "$1")"
+	case "$abs" in
+	"$ROOT" | "$ROOT"/*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
 # detect_repo_slug: owner/name from the origin remote for a sensible tracker
 # default; `unknown` when there is no remote (keeps the block valid YAML).
 detect_repo_slug() {
@@ -169,17 +225,30 @@ detect_repo_slug() {
 	fi
 }
 
-# config_block: the base rig:config frame. Story 2 fills tracker/triage values;
-# here the tracker line is a valid-YAML default derived from the remote.
+# config_block: the whole rig:config block, assembled from the section fragments.
+# Pure and deterministic (reads env, the origin remote, and the skills dir — all
+# stable within a run), so every re-upsert reproduces byte-identical output. The
+# tracker line always contributes; the triage map only when a triage skill is
+# present.
 config_block() {
-	local slug
-	slug="$(detect_repo_slug)"
+	local body
+	body="$(tracker_line)"
+	if triage_present; then
+		body="${body}"$'\n'"$(triage_yaml)"
+	fi
 	printf '%s\n%s\n%s\n%s\n%s' \
 		"$CONFIG_OPEN" \
 		'```yaml' \
-		"tracker: { backend: github, repo: ${slug} }" \
+		"$body" \
 		'```' \
 		"$CONFIG_CLOSE"
+}
+
+# sync_config: re-assemble and upsert the rig:config block into the agent file.
+# Shared by the block-owning sections (agent-file, tracker, triage); idempotent
+# because config_block is deterministic and upsert_block replaces in place.
+sync_config() {
+	upsert_block "$AF_PATH" "$(config_block)"
 }
 
 # --- section: agent-file -----------------------------------------------------
@@ -191,6 +260,10 @@ agent_file_detect() {
 	AF_CREATE_SYMLINK=0
 	local forced="${RIG_AGENT_FILE:-}"
 	if [ -n "$forced" ]; then
+		if ! path_under_root "$forced"; then
+			err "RIG_AGENT_FILE escapes the repo root ($ROOT): $forced"
+			exit 2
+		fi
 		AF_PATH="$forced"
 		if [ ! -e "$AF_PATH" ] && [ ! -L "$AF_PATH" ]; then
 			AF_CREATE_FILE=1
@@ -255,7 +328,11 @@ scratch_detect() {
 scratch_draft() {
 	info "scratch: ${SCRATCH_DIR}/"
 	[ "$SC_MKDIR" -eq 1 ] && step "mkdir ${SCRATCH_DIR}/"
-	[ "$SC_IGNORE" -eq 1 ] && step "add '${SCRATCH_DIR}/' to ${SC_TARGET}"
+	if [ "$SC_IGNORE" -eq 1 ]; then
+		step "add to ${SC_TARGET}:"
+		step "  ${SCRATCH_NOTE}"
+		step "  ${SCRATCH_DIR}/"
+	fi
 	return 0
 }
 
@@ -264,8 +341,203 @@ scratch_apply() {
 		mkdir -p "$SCRATCH_DIR"
 	fi
 	if [ "$SC_IGNORE" -eq 1 ]; then
-		printf '%s\n' "${SCRATCH_DIR}/" >>"$SC_TARGET"
+		# Same newline guard as upsert_block: a target lacking a trailing newline
+		# would otherwise glue the footprint onto its last line.
+		[ -s "$SC_TARGET" ] && printf '\n' >>"$SC_TARGET"
+		printf '%s\n%s/\n' "$SCRATCH_NOTE" "$SCRATCH_DIR" >>"$SC_TARGET"
 	fi
+}
+
+# --- section: tracker --------------------------------------------------------
+# Own the `tracker:` line of the config block. The backend is chosen by a `case`
+# seam on RIG_TRACKER (default github); each arm is a small function producing
+# one YAML line. A new backend = one function + one case arm — nothing else.
+tracker_line() {
+	case "${RIG_TRACKER:-github}" in
+	github) tracker_github ;;
+	shortcut) tracker_shortcut ;;
+	*)
+		err "unknown RIG_TRACKER: ${RIG_TRACKER:-} (supported: github, shortcut)"
+		exit 2
+		;;
+	esac
+}
+
+# github: repo slug from RIG_REPO or the origin remote (owner/name).
+tracker_github() {
+	local repo="${RIG_REPO:-$(detect_repo_slug)}"
+	printf 'tracker: { backend: github, repo: %s }' "$repo"
+}
+
+# shortcut: workspace from RIG_SHORTCUT_WORKSPACE. The token lives in
+# $SHORTCUT_API_TOKEN at skill-runtime and is deliberately NOT stored here.
+tracker_shortcut() {
+	printf 'tracker: { backend: shortcut, shortcut_workspace: %s }' \
+		"${RIG_SHORTCUT_WORKSPACE:-unknown}"
+}
+
+tracker_detect() {
+	TRACKER_LINE="$(tracker_line)"
+	return 0
+}
+
+tracker_draft() {
+	info "tracker: into rig:config"
+	step "$TRACKER_LINE"
+	return 0
+}
+
+tracker_apply() {
+	sync_config
+}
+
+# --- section: triage ---------------------------------------------------------
+# Only when a `triage` skill is present, write the five canonical label roles
+# into the config block. Presence and the label map are both pure functions, so
+# config_block can consult them regardless of section order.
+
+# The five canonical triage roles. Default label string = the role name.
+TRIAGE_ROLES=(needs-triage needs-info ready-for-agent ready-for-human wontfix)
+
+# triage_present: true IFF a `triage` skill directory exists in the skills
+# collection. RIG_TRIAGE=1/0 forces the answer (deterministic tests); otherwise
+# probe `triage/` under RIG_SKILLS_DIR (default ~/skills, the skillshare-managed
+# collection the triage skill itself is installed into).
+triage_present() {
+	case "${RIG_TRIAGE:-}" in
+	1) return 0 ;;
+	0) return 1 ;;
+	esac
+	[ -d "${RIG_SKILLS_DIR:-$HOME/skills}/triage" ]
+}
+
+# triage_yaml: the `triage:` map. Each role's label defaults to the role name,
+# overridable via RIG_TRIAGE_LABEL_<ROLE> (upper-cased, `-` → `_`).
+triage_yaml() {
+	local role env_name
+	printf 'triage:\n  labels:'
+	for role in "${TRIAGE_ROLES[@]}"; do
+		env_name="RIG_TRIAGE_LABEL_${role^^}"
+		env_name="${env_name//-/_}"
+		printf '\n    %s: %s' "$role" "${!env_name:-$role}"
+	done
+}
+
+triage_detect() {
+	if ! triage_present; then
+		if [ "${RIG_TRIAGE:-}" = "0" ]; then
+			SKIP_MSG="disabled (RIG_TRIAGE=0)"
+		else
+			SKIP_MSG="no triage skill in ${RIG_SKILLS_DIR:-$HOME/skills}"
+		fi
+		return 1
+	fi
+	return 0
+}
+
+triage_draft() {
+	info "triage: into rig:config"
+	printf '%s\n' "$(triage_yaml)" | sed 's/^/    /'
+	return 0
+}
+
+triage_apply() {
+	sync_config
+}
+
+# --- section: domain ---------------------------------------------------------
+# Scaffold the domain-doc layout the domain-modeling skill fills in: single
+# context (CONTEXT.md + docs/adr/) by default; multi-context (CONTEXT-MAP.md +
+# a per-context CONTEXT.md + docs/adr/) when monorepo signals are present. Files
+# are seeded minimal — real content is domain-modeling's job, not rig's. Guarded
+# by existence: only-if-absent, so a re-run never clobbers.
+
+# domain_multi_context: monorepo signals (closed set) → multi-context layout.
+domain_multi_context() {
+	if [ -f pnpm-workspace.yaml ]; then
+		return 0
+	fi
+	if [ -f package.json ] && grep -q '"workspaces"' package.json 2>/dev/null; then
+		return 0
+	fi
+	local d
+	for d in packages/*/; do
+		[ -d "$d" ] || continue
+		if [ -d "${d}src" ]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+# domain_contexts: bounded-context dirs — each populated packages/* with its own
+# src/. Prints one path per line; empty when none are detectable.
+domain_contexts() {
+	local d
+	for d in packages/*/; do
+		[ -d "$d" ] || continue
+		[ -d "${d}src" ] && printf '%s\n' "${d%/}"
+	done
+}
+
+domain_detect() {
+	DOMAIN_MULTI=0
+	if domain_multi_context; then
+		DOMAIN_MULTI=1
+	fi
+	DOMAIN_FILES=()
+	DOMAIN_DIRS=()
+	if [ "$DOMAIN_MULTI" -eq 1 ]; then
+		[ -e CONTEXT-MAP.md ] || DOMAIN_FILES+=("CONTEXT-MAP.md")
+		local ctx
+		while IFS= read -r ctx; do
+			[ -n "$ctx" ] || continue
+			[ -e "${ctx}/CONTEXT.md" ] || DOMAIN_FILES+=("${ctx}/CONTEXT.md")
+		done < <(domain_contexts)
+	else
+		[ -e CONTEXT.md ] || DOMAIN_FILES+=("CONTEXT.md")
+	fi
+	[ -d docs/adr ] || DOMAIN_DIRS+=("docs/adr")
+	[ ${#DOMAIN_FILES[@]} -gt 0 ] || [ ${#DOMAIN_DIRS[@]} -gt 0 ]
+}
+
+domain_draft() {
+	local layout="single-context"
+	[ "$DOMAIN_MULTI" -eq 1 ] && layout="multi-context"
+	info "domain: ${layout} scaffold"
+	local d f
+	for d in "${DOMAIN_DIRS[@]:-}"; do
+		[ -n "$d" ] && step "mkdir ${d}/"
+	done
+	for f in "${DOMAIN_FILES[@]:-}"; do
+		[ -n "$f" ] && step "seed ${f}"
+	done
+	return 0
+}
+
+# domain_seed: minimal placeholder for a domain doc — a heading plus a pointer
+# to the skill that fills it. Never called on an existing path (detect guards).
+domain_seed() {
+	local f="$1" title
+	case "$f" in
+	*CONTEXT-MAP.md) title="Context Map" ;;
+	*) title="Context" ;;
+	esac
+	printf '# %s\n\n<!-- Seeded by rig. Run the domain-modeling skill to fill this in. -->\n' \
+		"$title" >"$f"
+}
+
+domain_apply() {
+	local d f
+	for d in "${DOMAIN_DIRS[@]:-}"; do
+		[ -n "$d" ] || continue
+		mkdir -p "$d"
+	done
+	for f in "${DOMAIN_FILES[@]:-}"; do
+		[ -n "$f" ] || continue
+		mkdir -p "$(dirname "$f")"
+		domain_seed "$f"
+	done
 }
 
 # --- main loop: walk the registry through detect → draft → confirm → apply ---
@@ -276,7 +548,8 @@ main() {
 	for section in "${SECTIONS[@]}"; do
 		fn="${section//-/_}"
 		if ! "${fn}_detect"; then
-			info "${section}: already configured"
+			info "${section}: ${SKIP_MSG:-already configured}"
+			SKIP_MSG=""
 			continue
 		fi
 		"${fn}_draft"
