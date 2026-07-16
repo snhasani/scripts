@@ -1,0 +1,294 @@
+#!/usr/bin/env bash
+# rig — bootstrap a repo for the agent-skills collection.
+#
+# Model: a repo adopting the skills needs per-repo config in the places the
+# skills already read — a marker-wrapped `rig:config` block in the agent file
+# (AGENTS.md/CLAUDE.md, already in every agent's context) and a git-ignored
+# scratch root (.tmp/). rig inspects the repo, proposes defaults, and writes
+# only inside its own markers/lines, so a re-run adds nothing and clobbers
+# nothing.
+#
+# Engine: each concern is a SECTION — a set of shell functions shaped
+# detect → draft → apply — walked from an ordered registry by the main loop,
+# which supplies the shared confirm phase (auto-yes when headless). Idempotency
+# is per-section: the config block is guarded by its markers (grep → replace in
+# place, else append); scratch is guarded by `git check-ignore`. New sections
+# (story 2: tracker, triage, domain) are a function trio + one registry entry.
+#
+# Anchoring: all paths resolve under `git rev-parse --show-toplevel`; rig
+# refuses to run outside a git repo. --dry-run prints the intended edits and
+# writes nothing.
+
+set -euo pipefail
+
+# --- constants ---------------------------------------------------------------
+CONFIG_OPEN='<!-- rig:config -->'
+CONFIG_CLOSE='<!-- /rig:config -->'
+SCRATCH_DIR='.tmp'
+
+# --- ordered section registry ------------------------------------------------
+# Story 2 inserts `tracker triage` after agent-file and appends `domain`.
+SECTIONS=(agent-file scratch)
+
+# --- flags / state -----------------------------------------------------------
+ASSUME_YES=0
+DRY_RUN=0
+DEBUG=0
+
+# --- logging (names/decisions only, colored like the toolbox reference) ------
+info() { printf '%s\n' "$*"; }
+step() { printf '  %s\n' "$*"; }
+note() { printf '\033[33m%s\033[0m\n' "$*"; }
+err() { printf 'rig: %s\n' "$*" >&2; }
+debug() { [ "$DEBUG" -eq 1 ] && printf '\033[2mrig[debug] %s\033[0m\n' "$*" >&2 || true; }
+
+usage() {
+	cat <<'EOF'
+rig — bootstrap a repo for the agent-skills collection.
+
+usage: rig [options]
+
+options:
+  -y, --yes       headless: accept detected defaults, no prompts
+  -h, --help      show this help and exit
+  -v, --debug     verbose diagnostics on stderr
+      --dry-run   print the intended edits, write nothing
+
+env (detected defaults; override to force):
+  RIG_AGENT_FILE  agent file to use/create (default: AGENTS.md, else CLAUDE.md)
+
+Writes a marker-wrapped `rig:config` block into the agent file and provisions a
+git-ignored scratch root (.tmp/). Idempotent and non-destructive: a re-run adds
+no duplicate blocks and leaves content outside rig's markers byte-for-byte.
+EOF
+}
+
+# --- arg parsing -------------------------------------------------------------
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-y | --yes) ASSUME_YES=1 ;;
+	-h | --help)
+		usage
+		exit 0
+		;;
+	-v | --debug) DEBUG=1 ;;
+	--dry-run) DRY_RUN=1 ;;
+	--)
+		shift
+		break
+		;;
+	-*)
+		err "unknown option: $1"
+		usage >&2
+		exit 2
+		;;
+	*)
+		err "unexpected argument: $1"
+		exit 2
+		;;
+	esac
+	shift
+done
+
+# --- anchor: refuse outside a git repo ---------------------------------------
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -z "$ROOT" ]; then
+	err "not inside a git repository (run rig from within a repo)"
+	exit 1
+fi
+cd "$ROOT"
+debug "repo root: $ROOT"
+
+# --- shared engine helpers ---------------------------------------------------
+
+# confirm: the lifecycle's confirm phase. Auto-yes when headless (--yes or a
+# non-TTY stdin) so rig runs unattended; a plain-bash prompt otherwise.
+confirm() {
+	if [ "$ASSUME_YES" -eq 1 ] || [ ! -t 0 ]; then
+		return 0
+	fi
+	printf '%s [y/N] ' "$1"
+	local reply
+	read -r reply || return 1
+	case "$reply" in
+	[yY] | [yY][eE][sS]) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+# upsert_block: write CONTENT between the config markers in FILE. If the open
+# marker is present, replace the marked region in place; else append the block.
+# Deterministic CONTENT => a re-run reproduces byte-identical output. Temp files
+# sit beside FILE (same filesystem for an atomic mv, and no dependency on a
+# writable system TMPDIR — rig runs inside restrictive sandboxes).
+upsert_block() {
+	local file="$1" content="$2"
+	local blk="${file}.rig-blk.$$" tmp="${file}.rig-new.$$"
+	printf '%s\n' "$content" >"$blk"
+	if grep -qF "$CONFIG_OPEN" "$file" 2>/dev/null; then
+		awk -v om="$CONFIG_OPEN" -v cm="$CONFIG_CLOSE" -v blk="$blk" '
+			function dump(  line) { while ((getline line < blk) > 0) print line; close(blk) }
+			$0 == om { dump(); skip = 1; next }
+			skip && $0 == cm { skip = 0; next }
+			skip { next }
+			{ print }
+		' "$file" >"$tmp"
+		mv "$tmp" "$file"
+	else
+		[ -s "$file" ] && printf '\n' >>"$file"
+		cat "$blk" >>"$file"
+	fi
+	rm -f "$blk" "$tmp"
+}
+
+# detect_repo_slug: owner/name from the origin remote for a sensible tracker
+# default; `unknown` when there is no remote (keeps the block valid YAML).
+detect_repo_slug() {
+	local url name rest owner
+	url="$(git remote get-url origin 2>/dev/null || true)"
+	if [ -z "$url" ]; then
+		printf 'unknown'
+		return 0
+	fi
+	url="${url%.git}"
+	url="${url%/}"
+	case "$url" in
+	*/*) ;;
+	*)
+		printf 'unknown'
+		return 0
+		;;
+	esac
+	name="${url##*/}"
+	rest="${url%/*}"
+	owner="${rest##*[:/]}"
+	if [ -n "$owner" ] && [ -n "$name" ]; then
+		printf '%s/%s' "$owner" "$name"
+	else
+		printf 'unknown'
+	fi
+}
+
+# config_block: the base rig:config frame. Story 2 fills tracker/triage values;
+# here the tracker line is a valid-YAML default derived from the remote.
+config_block() {
+	local slug
+	slug="$(detect_repo_slug)"
+	printf '%s\n%s\n%s\n%s\n%s' \
+		"$CONFIG_OPEN" \
+		'```yaml' \
+		"tracker: { backend: github, repo: ${slug} }" \
+		'```' \
+		"$CONFIG_CLOSE"
+}
+
+# --- section: agent-file -----------------------------------------------------
+# Ensure the agent file exists (real AGENTS.md + CLAUDE.md symlink when neither
+# exists; use whichever exists, never overwrite a plain file), then upsert the
+# rig:config block.
+agent_file_detect() {
+	AF_CREATE_FILE=0
+	AF_CREATE_SYMLINK=0
+	local forced="${RIG_AGENT_FILE:-}"
+	if [ -n "$forced" ]; then
+		AF_PATH="$forced"
+		if [ ! -e "$AF_PATH" ] && [ ! -L "$AF_PATH" ]; then
+			AF_CREATE_FILE=1
+		fi
+	elif [ -e AGENTS.md ] || [ -L AGENTS.md ]; then
+		AF_PATH="AGENTS.md"
+	elif [ -e CLAUDE.md ] || [ -L CLAUDE.md ]; then
+		AF_PATH="CLAUDE.md"
+	else
+		AF_PATH="AGENTS.md"
+		AF_CREATE_FILE=1
+		AF_CREATE_SYMLINK=1
+	fi
+
+	AF_BLOCK="$(config_block)"
+	if [ "$AF_CREATE_FILE" -eq 1 ]; then
+		AF_ACTION="create ${AF_PATH} + rig:config block"
+	elif grep -qF "$CONFIG_OPEN" "$AF_PATH" 2>/dev/null; then
+		AF_ACTION="update rig:config block in ${AF_PATH}"
+	else
+		AF_ACTION="insert rig:config block into ${AF_PATH}"
+	fi
+	return 0
+}
+
+agent_file_draft() {
+	info "agent-file: ${AF_ACTION}"
+	[ "$AF_CREATE_SYMLINK" -eq 1 ] && step "symlink CLAUDE.md -> AGENTS.md"
+	printf '%s\n' "$AF_BLOCK" | sed 's/^/    /'
+}
+
+agent_file_apply() {
+	if [ "$AF_CREATE_FILE" -eq 1 ]; then
+		printf '# Agent instructions\n' >"$AF_PATH"
+	fi
+	if [ "$AF_CREATE_SYMLINK" -eq 1 ]; then
+		ln -s AGENTS.md CLAUDE.md
+	fi
+	upsert_block "$AF_PATH" "$AF_BLOCK"
+}
+
+# --- section: scratch --------------------------------------------------------
+# Provision the fixed scratch root .tmp/ and git-ignore it via the repo's own
+# convention (committed .gitignore if present, else .git/info/exclude).
+# `git check-ignore` is the idempotency guard — skip when already ignored.
+scratch_detect() {
+	SC_MKDIR=0
+	SC_IGNORE=0
+	SC_TARGET=""
+	[ -d "$SCRATCH_DIR" ] || SC_MKDIR=1
+	if ! git check-ignore -q "$SCRATCH_DIR"; then
+		SC_IGNORE=1
+		if [ -f .gitignore ]; then
+			SC_TARGET=".gitignore"
+		else
+			SC_TARGET=".git/info/exclude"
+		fi
+	fi
+	[ "$SC_MKDIR" -eq 1 ] || [ "$SC_IGNORE" -eq 1 ]
+}
+
+scratch_draft() {
+	info "scratch: ${SCRATCH_DIR}/"
+	[ "$SC_MKDIR" -eq 1 ] && step "mkdir ${SCRATCH_DIR}/"
+	[ "$SC_IGNORE" -eq 1 ] && step "add '${SCRATCH_DIR}/' to ${SC_TARGET}"
+	return 0
+}
+
+scratch_apply() {
+	if [ "$SC_MKDIR" -eq 1 ]; then
+		mkdir -p "$SCRATCH_DIR"
+	fi
+	if [ "$SC_IGNORE" -eq 1 ]; then
+		printf '%s\n' "${SCRATCH_DIR}/" >>"$SC_TARGET"
+	fi
+}
+
+# --- main loop: walk the registry through detect → draft → confirm → apply ---
+main() {
+	info "rig: $ROOT"
+	[ "$DRY_RUN" -eq 1 ] && note "dry-run: no changes will be written"
+	local section fn
+	for section in "${SECTIONS[@]}"; do
+		fn="${section//-/_}"
+		if ! "${fn}_detect"; then
+			info "${section}: already configured"
+			continue
+		fi
+		"${fn}_draft"
+		if [ "$DRY_RUN" -eq 1 ]; then
+			continue
+		fi
+		if confirm "apply ${section}?"; then
+			"${fn}_apply"
+		else
+			note "${section}: skipped"
+		fi
+	done
+}
+
+main
