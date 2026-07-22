@@ -46,17 +46,29 @@ run() { XDG_STATE_HOME="$base/state" "$WATCHER" "$@"; }
 # 1. "light" resolves to Light and writes the state file
 run light >/dev/null
 got=$(cat "$base/state/appearance/mode" 2>/dev/null)
-[ "$got" = "Light" ] && ok "light -> Light" || bad "light -> Light" "$got"
+if [ "$got" = "Light" ]; then
+	ok "light -> Light"
+else
+	bad "light -> Light" "$got"
+fi
 
 # 2. "dark" resolves to Dark
 run dark >/dev/null
 got=$(cat "$base/state/appearance/mode" 2>/dev/null)
-[ "$got" = "Dark" ] && ok "dark -> Dark" || bad "dark -> Dark" "$got"
+if [ "$got" = "Dark" ]; then
+	ok "dark -> Dark"
+else
+	bad "dark -> Dark" "$got"
+fi
 
 # 3. anything else defaults to Dark (only "light" flips it)
 run bogus >/dev/null
 got=$(cat "$base/state/appearance/mode" 2>/dev/null)
-[ "$got" = "Dark" ] && ok "unrecognized mode defaults to Dark" || bad "unrecognized mode defaults to Dark" "$got"
+if [ "$got" = "Dark" ]; then
+	ok "unrecognized mode defaults to Dark"
+else
+	bad "unrecognized mode defaults to Dark" "$got"
+fi
 
 # 4. no leftover .tmp file after a run (atomic write via rename)
 if [ -e "$base/state/appearance/mode.tmp" ]; then
