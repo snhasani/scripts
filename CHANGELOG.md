@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/snhasani/scripts/compare/v0.3.0...v0.4.0) (2026-07-22)
+
+
+### Features
+
+* **macos-appearance-watcher:** sync tmux theme with macOS appearance live ([e6a2050](https://github.com/snhasani/scripts/commit/e6a20509066760b42e8ccabe4994631234fd8996))
+
+
+### Bug Fixes
+
+* **macos-appearance-watcher:** use if/else instead of &&/|| in smoke test ([d439ce4](https://github.com/snhasani/scripts/commit/d439ce43489b33e0931944f03e06c3abb7915ef9))
+
 ## [0.3.0](https://github.com/snhasani/scripts/compare/v0.2.0...v0.3.0) (2026-07-18)
 
 
