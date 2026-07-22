@@ -1,0 +1,76 @@
+#!/bin/sh
+# macos-appearance-watcher — sync macOS light/dark appearance into tmux + a state file.
+#
+# Invoked by `dark-notify -c` with the new mode ("light"/"dark") as $1. dark-notify
+# reports the current mode immediately on start, not just on future changes, so a
+# session that missed a live transition self-corrects as soon as the watcher (re)starts.
+#
+# Pushes tmux's theme option directly (server-wide) instead of relying on tmux's own
+# client-light-theme/client-dark-theme hooks, which only fire for a client attached
+# and subscribed at the moment of a live transition - anything else misses it.
+#
+# LaunchAgents run with a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin), so brew-installed
+# binaries are resolved via known prefixes rather than PATH lookup. $HOME is reliably set
+# for a per-user LaunchAgent, so no user/home path is hardcoded.
+#
+# Run with --check to verify dependencies before loading the LaunchAgent.
+
+find_bin() {
+	# $1: binary name. Checks common Homebrew prefixes (Apple Silicon, Intel) before PATH.
+	for prefix in /opt/homebrew/bin /usr/local/bin; do
+		[ -x "$prefix/$1" ] && {
+			printf '%s' "$prefix/$1"
+			return 0
+		}
+	done
+	command -v "$1" 2>/dev/null
+}
+
+TMUX_BIN="$(find_bin tmux)"
+DARK_NOTIFY_BIN="$(find_bin dark-notify)"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/appearance"
+TMUX_PLUGIN="${XDG_CONFIG_HOME:-$HOME/.config}/tmux/plugins/tokyo-night-tmux/tokyo-night.tmux"
+
+check_deps() {
+	ok=0
+
+	if [ -n "$DARK_NOTIFY_BIN" ]; then
+		echo "OK      dark-notify -> $DARK_NOTIFY_BIN"
+	else
+		echo "MISSING dark-notify - install with: brew install cormacrelf/tap/dark-notify"
+		ok=1
+	fi
+
+	if [ -n "$TMUX_BIN" ]; then
+		echo "OK      tmux -> $TMUX_BIN"
+	else
+		echo "MISSING tmux - install with: brew install tmux"
+		ok=1
+	fi
+
+	return "$ok"
+}
+
+if [ "$1" = "--check" ]; then
+	check_deps
+	exit $?
+fi
+
+mode="$1"
+scheme=Dark
+[ "$mode" = "light" ] && scheme=Light
+
+mkdir -p "$STATE_DIR"
+printf '%s' "$scheme" >"$STATE_DIR/mode.tmp"
+mv "$STATE_DIR/mode.tmp" "$STATE_DIR/mode"
+
+if [ -n "$TMUX_BIN" ]; then
+	if "$TMUX_BIN" list-sessions >/dev/null 2>&1; then
+		variant=night
+		[ "$scheme" = "Light" ] && variant=day
+		"$TMUX_BIN" set -g @tokyo-night-tmux_theme "$variant"
+		"$TMUX_BIN" run-shell "$TMUX_PLUGIN"
+	fi
+else
+	echo "macos-appearance-watcher: tmux not found - install with: brew install tmux" >&2
+fi
