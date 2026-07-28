@@ -1,0 +1,14 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# shfmt reads these directly, and conform passes no style flags of its own when
+# an .editorconfig is present. Without this file the editor infers indentation
+# from the buffer and can write spaces, which the pre-commit hook then rewrites
+# back to tabs on every commit.
+[*.{sh,bash,zsh}]
+indent_style = tab
