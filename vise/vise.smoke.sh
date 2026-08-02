@@ -457,5 +457,63 @@ else
     bad "batch removal: summary names the failed coordinate, not the ones that succeeded" "$rm_out"
 fi
 
+# --- fixture seams: VISE_CONFIG_JSON / VISE_LS_JSON / VISE_REGISTRY_JSON ----
+# vise::config_json and vise::render otherwise shell out to `mise` directly,
+# so nothing above this line can exercise the identity join without real mise
+# state on the machine running the suite. These three env vars are TEST SEAMS
+# (see vise::usage's TEST SEAMS block) — a fixture file stands in for the
+# corresponding `mise ... --json` call, at the exact call site, with zero
+# effect unless a test sets it. PATH is stripped of every `mise` on this
+# machine for both checks below: if a seam were missing or miswired, the
+# fallback `mise ...` branch would run and fail with "command not found"
+# instead of quietly reading real machine state.
+ORIG_PATH="$PATH"
+SEAM_DIR="$(mktemp -d "$BASE/seams.XXXXXX")"
+NO_MISE_PATH="/usr/bin:/bin"
+if [ -n "$(PATH="$NO_MISE_PATH" command -v mise 2>/dev/null)" ]; then
+    printf 'mise is reachable on %s, seam tests would be meaningless, pick a narrower PATH\n' "$NO_MISE_PATH" >&2
+    exit 2
+fi
+
+# 1. VISE_CONFIG_JSON stands in for `mise config ls --json`, used by
+# vise::scope_of (and so vise::rm) independently of vise::render/list.
+SEAM_GLOBAL_CFG="$SEAM_DIR/global.toml"
+cat >"$SEAM_DIR/config.json" <<EOF
+[{"path": "$SEAM_GLOBAL_CFG", "tools": ["seam-tool"]}]
+EOF
+out=$(PATH="$NO_MISE_PATH" VISE_CONFIG_JSON="$SEAM_DIR/config.json" \
+    MISE_GLOBAL_CONFIG_FILE="$SEAM_GLOBAL_CFG" VISE_DRY_RUN=1 \
+    bash "$VISE" __rm seam-tool 2>&1)
+rc=$?
+if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -qx 'DRY: mise rm -g seam-tool'; then
+    ok "VISE_CONFIG_JSON stands in for mise config ls --json (no real mise on PATH)"
+else
+    bad "VISE_CONFIG_JSON stands in for mise config ls --json (no real mise on PATH)" "rc=$rc out=[$out]"
+fi
+
+# 2. VISE_LS_JSON + VISE_REGISTRY_JSON stand in inside vise::render (list also
+# needs VISE_CONFIG_JSON, since render calls vise::config_json too).
+SEAM_CATALOG="$SEAM_DIR/catalog.tsv"
+cat >"$SEAM_CATALOG" <<'EOF'
+seam:coord	seam-name	lsp	seamlang
+EOF
+cat >"$SEAM_DIR/ls.json" <<'EOF'
+{"seam:coord": [{"version": "9.9.9", "active": true}]}
+EOF
+echo '[]' >"$SEAM_DIR/registry.json"
+out=$(PATH="$NO_MISE_PATH" VISE_CATALOG="$SEAM_CATALOG" \
+    VISE_CONFIG_JSON="$SEAM_DIR/config.json" VISE_LS_JSON="$SEAM_DIR/ls.json" \
+    VISE_REGISTRY_JSON="$SEAM_DIR/registry.json" \
+    MISE_GLOBAL_CONFIG_FILE="$SEAM_GLOBAL_CFG" \
+    bash "$VISE" list 2>&1)
+rc=$?
+if [ "$rc" -eq 0 ] &&
+    printf '%s\n' "$out" | awk -F'\t' '$1 == "seam:coord"' | grep -q 'seam-name' &&
+    printf '%s\n' "$out" | awk -F'\t' '$1 == "seam:coord" {print $6}' | grep -q '9.9.9'; then
+    ok "VISE_LS_JSON + VISE_REGISTRY_JSON stand in for mise ls/registry --json (no real mise on PATH)"
+else
+    bad "VISE_LS_JSON + VISE_REGISTRY_JSON stand in for mise ls/registry --json (no real mise on PATH)" "rc=$rc out=[$out]"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
