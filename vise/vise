@@ -202,28 +202,42 @@ vise::upgrade() {
 # Each coordinate resolves its own scope rather than trusting the caller's,
 # so a mixed-scope multi-select removes every tool from its correct config
 # file instead of applying one row's flag to the whole batch.
+#
+# Every coordinate is attempted even after an earlier one fails: under this
+# script's `set -e`, an unguarded failure mid-loop used to abort the whole
+# batch, leaving every coordinate after the failed one untouched with no
+# report of what happened. Failures are collected and named in a summary
+# instead, with a nonzero exit so a script driving vise can tell.
 vise::rm() {
     vise::require_selection "rm" "$@" || return 1
-    local coord scope
+    local coord scope coord_rc rc=0
+    local -a failed=()
     for coord in "$@"; do
         scope=$(vise::scope_of "$coord")
         vise::log "remove $coord (scope: $scope)"
+        coord_rc=0
         case "$scope" in
         both)
-            vise::mutate mise rm -g "$coord"
-            vise::mutate mise rm "$coord"
+            vise::mutate mise rm -g "$coord" || coord_rc=1
+            vise::mutate mise rm "$coord" || coord_rc=1
             ;;
         global)
-            vise::mutate mise rm -g "$coord"
+            vise::mutate mise rm -g "$coord" || coord_rc=1
             ;;
         project)
-            vise::mutate mise rm "$coord"
+            vise::mutate mise rm "$coord" || coord_rc=1
             ;;
         none)
             printf 'vise: %s is not tracked in any config, skipping\n' "$coord" >&2
             ;;
         esac
+        ((coord_rc == 0)) || failed+=("$coord")
     done
+    if ((${#failed[@]} > 0)); then
+        printf 'vise: failed to remove: %s\n' "${failed[*]}" >&2
+        rc=1
+    fi
+    return "$rc"
 }
 
 # Honours MISE_GLOBAL_CONFIG_FILE and XDG_CONFIG_HOME, and resolves symlinks:
