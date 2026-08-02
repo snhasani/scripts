@@ -385,5 +385,77 @@ else
     bad "write_atomic: creates dest when it doesn't exist yet" "$got4"
 fi
 
+# --- partial failure during batch removal: every coordinate is attempted ----
+# vise::rm used to loop `vise::mutate mise rm ...` unguarded, so under this
+# script's `set -e` the first failure killed the function (and the process),
+# leaving every coordinate selected after it untouched and printing no
+# summary of what happened or didn't. VISE_DRY_RUN can't exercise this — it
+# intercepts inside vise::mutate before a real failure is possible — so a
+# stub mise stands in for the real one, answering `config ls --json` (how
+# vise::scope_of decides each coordinate's scope) and failing `rm` for one
+# specific coordinate only.
+RM_DIR="$(mktemp -d "$BASE/rm-batch.XXXXXX")"
+RM_STUB_BIN="$(mktemp -d "$BASE/rm-stubbin.XXXXXX")"
+RM_GLOBAL_CFG="$RM_DIR/global-config.toml"
+: >"$RM_GLOBAL_CFG"
+RM_CALLS="$RM_DIR/calls.log"
+: >"$RM_CALLS"
+
+cat >"$RM_STUB_BIN/mise" <<EOF
+#!/bin/sh
+# Logs every invocation (so the test can see which coordinates the loop
+# reached) and fails "rm" only for \$RM_FAIL_COORD, to make the mid-batch
+# failure deterministic.
+printf '%s\n' "\$*" >>'$RM_CALLS'
+if [ "\$1" = "config" ] && [ "\$2" = "ls" ]; then
+    printf '[{"path": "%s", "tools": ["tool-a", "tool-b", "tool-c"]}]\n' '$RM_GLOBAL_CFG'
+    exit 0
+fi
+if [ "\$1" = "ls" ] && [ "\$2" = "--json" ]; then
+    echo '{}'
+    exit 0
+fi
+if [ "\$1" = "registry" ] && [ "\$2" = "--json" ]; then
+    echo '[]'
+    exit 0
+fi
+if [ "\$1" = "rm" ]; then
+    shift
+    [ "\$1" = "-g" ] && shift
+    if [ "\$1" = "\$RM_FAIL_COORD" ]; then
+        echo "mise: failed to remove \$1" >&2
+        exit 1
+    fi
+    exit 0
+fi
+exit 0
+EOF
+chmod +x "$RM_STUB_BIN/mise"
+
+rm_out=$(cd "$REPO_ROOT" && PATH="$RM_STUB_BIN:$PATH" \
+    MISE_GLOBAL_CONFIG_FILE="$RM_GLOBAL_CFG" RM_FAIL_COORD="tool-b" \
+    bash "$VISE" __rm tool-a tool-b tool-c 2>&1)
+rm_rc=$?
+
+attempted=$(grep -c '^rm -g tool-' "$RM_CALLS")
+if [ "$attempted" = "3" ]; then
+    ok "batch removal: every coordinate attempted despite a mid-batch failure"
+else
+    bad "batch removal: every coordinate attempted despite a mid-batch failure" "$(cat "$RM_CALLS")"
+fi
+
+if [ "$rm_rc" -ne 0 ]; then
+    ok "batch removal: exits non-zero when any coordinate fails"
+else
+    bad "batch removal: exits non-zero when any coordinate fails" "rc=$rm_rc"
+fi
+
+if printf '%s\n' "$rm_out" | grep -q 'tool-b' &&
+    ! printf '%s\n' "$rm_out" | grep -qE 'failed to remove:.*tool-a|failed to remove:.*tool-c'; then
+    ok "batch removal: summary names the failed coordinate, not the ones that succeeded"
+else
+    bad "batch removal: summary names the failed coordinate, not the ones that succeeded" "$rm_out"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
