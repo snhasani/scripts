@@ -128,5 +128,70 @@ else
 	bad "different cwd: catalog resolved" "$got"
 fi
 
+# --- empty-selection guards on mutating actions ------------------------------
+# fzf's {+1} placeholder expands to nothing when the filtered list has zero
+# matches and nothing is tab-selected — an ordinary state (type a query with
+# no hits, then hit a bind key), not a contrived one. Every mutating action
+# must refuse that instead of handing mise a bare command: `mise upgrade`
+# with no tool argument upgrades every installed tool, not "none".
+
+# 1. the money test: empty upgrade must refuse, not fan out to the whole
+# machine's toolchain.
+out=$(VISE_DRY_RUN=1 bash "$VISE" __upgrade 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ] && ! printf '%s\n' "$out" | grep -qx 'DRY: mise upgrade' &&
+	printf '%s\n' "$out" | grep -q '^vise: '; then
+	ok "empty upgrade refuses instead of upgrading every installed tool"
+else
+	bad "empty upgrade refuses instead of upgrading every installed tool" "rc=$rc out=[$out]"
+fi
+
+# 2. the other mutating actions get the same guard.
+for action in __use-global __use-project __rm; do
+	out=$(VISE_DRY_RUN=1 bash "$VISE" "$action" 2>&1)
+	rc=$?
+	if [ "$rc" -ne 0 ] && ! printf '%s\n' "$out" | grep -q '^DRY: mise ' &&
+		printf '%s\n' "$out" | grep -q '^vise: '; then
+		ok "empty $action refuses (no mutation attempted)"
+	else
+		bad "empty $action refuses (no mutation attempted)" "rc=$rc out=[$out]"
+	fi
+done
+
+# 3. control: a real selection must still go through unguarded — without
+# this, a guard that refuses everything would pass the assertions above too.
+out=$(VISE_DRY_RUN=1 bash "$VISE" __upgrade shfmt 2>&1)
+if printf '%s\n' "$out" | grep -qx 'DRY: mise upgrade shfmt'; then
+	ok "non-empty upgrade still dry-runs"
+else
+	bad "non-empty upgrade still dry-runs" "$out"
+fi
+
+# --- bash 3.2 compatibility ---------------------------------------------------
+# macOS ships /bin/bash 3.2.57. Bash below 4.4 treats "${ARR[@]}" on a
+# zero-length array as an unset variable under `set -u`, aborting the script
+# — exactly the empty-selection path exercised above. `#!/usr/bin/env bash`
+# only reaches a newer bash if one sits earlier on PATH, so this must hold
+# against /bin/bash directly, not whatever bash happens to be default.
+if [ ! -x /bin/bash ]; then
+	printf '  \033[33mskip\033[0m bash 3.2 compatibility (/bin/bash not present)\n'
+elif ! /bin/bash -c '((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4)))' 2>/dev/null; then
+	crashed=0
+	for action in __preview __use-global __use-project __upgrade __rm; do
+		out=$(VISE_DRY_RUN=1 /bin/bash "$VISE" "$action" 2>&1)
+		case "$out" in
+		*'unbound variable'*) crashed=1 ;;
+		esac
+	done
+	if [ "$crashed" -eq 0 ]; then
+		ok "empty-selection dispatch survives /bin/bash 3.2 (no unbound variable)"
+	else
+		bad "empty-selection dispatch survives /bin/bash 3.2 (no unbound variable)" "$out"
+	fi
+else
+	sys_ver=$(/bin/bash -c 'printf "%s.%s" "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"')
+	printf '  \033[33mskip\033[0m bash 3.2 compatibility (/bin/bash is %s, not pre-4.4)\n' "$sys_ver"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
