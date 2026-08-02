@@ -467,7 +467,6 @@ fi
 # machine for both checks below: if a seam were missing or miswired, the
 # fallback `mise ...` branch would run and fail with "command not found"
 # instead of quietly reading real machine state.
-ORIG_PATH="$PATH"
 SEAM_DIR="$(mktemp -d "$BASE/seams.XXXXXX")"
 NO_MISE_PATH="/usr/bin:/bin"
 if [ -n "$(PATH="$NO_MISE_PATH" command -v mise 2>/dev/null)" ]; then
