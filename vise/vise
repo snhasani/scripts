@@ -118,6 +118,11 @@ ENVIRONMENT
   VISE_CACHE=DIR       cache location (default ${XDG_CACHE_HOME:-~/.cache}/vise)
   VISE_NO_GH=1         skip GitHub stars/last-push during sync
 
+TEST SEAMS (not for interactive use — fixture files stand in for mise, see vise.smoke.sh)
+  VISE_CONFIG_JSON=PATH    replaces `mise config ls --json`
+  VISE_LS_JSON=PATH        replaces `mise ls --json`
+  VISE_REGISTRY_JSON=PATH  replaces `mise registry --json`
+
 FILES
   catalog.tsv            generated, the default. Rebuild with: vise sync
   catalog-overrides.tsv  hand-curated rows, merged over the catalog on sync
@@ -252,7 +257,11 @@ vise::global_config() {
 # are canonical.
 vise::config_json() {
     local raw resolved
-    raw=$(mise config ls --json)
+    if [[ -n "${VISE_CONFIG_JSON:-}" ]]; then
+        raw=$(cat "$VISE_CONFIG_JSON")
+    else
+        raw=$(mise config ls --json)
+    fi
     resolved=$(printf '%s' "$raw" | jq -r '.[].path' | while IFS= read -r p; do
         realpath "$p" 2>/dev/null || printf '%s\n' "$p"
     done | jq -Rn '[inputs]')
@@ -386,10 +395,18 @@ vise::render() {
     config_json=$(vise::config_json)
     vise::debug "mise config ls  $(($(vise::now_ms) - t0))ms"
     t0=$(vise::now_ms)
-    ls_json=$(mise ls --json)
+    if [[ -n "${VISE_LS_JSON:-}" ]]; then
+        ls_json=$(cat "$VISE_LS_JSON")
+    else
+        ls_json=$(mise ls --json)
+    fi
     vise::debug "mise ls         $(($(vise::now_ms) - t0))ms"
     t0=$(vise::now_ms)
-    registry_json=$(mise registry --json)
+    if [[ -n "${VISE_REGISTRY_JSON:-}" ]]; then
+        registry_json=$(cat "$VISE_REGISTRY_JSON")
+    else
+        registry_json=$(mise registry --json)
+    fi
     vise::debug "mise registry   $(($(vise::now_ms) - t0))ms"
     vise::debug "global config   $(vise::global_config)"
 
