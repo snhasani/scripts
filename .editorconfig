@@ -8,7 +8,17 @@ trim_trailing_whitespace = true
 
 # shfmt reads these directly, and conform passes no style flags of its own when
 # an .editorconfig is present. Without this file the editor infers indentation
-# from the buffer and can write spaces, which the pre-commit hook then rewrites
-# back to tabs on every commit.
+# from the buffer and can disagree with the formatter, which the pre-commit hook
+# then rewrites on every commit. shfmt defaults to tabs, so indent_size only
+# takes effect once indent_style is space — both keys are required together.
 [*.{sh,bash,zsh}]
-indent_style = tab
+indent_style = space
+indent_size = 4
+
+# Tool entrypoints are extensionless by convention (bin/<tool> symlinks to
+# <tool>/<tool>), so no *.sh glob reaches them and they would silently keep
+# shfmt's tab default while every other shell file used spaces. A new tool must
+# be added here — it is the one place in the repo that needs per-tool wiring.
+[{vise,rig,sancla,macos-appearance-watcher}]
+indent_style = space
+indent_size = 4
