@@ -10,43 +10,43 @@ set -uo pipefail
 
 VISE="${1:-$(cd "$(dirname "$0")" && pwd)/vise}"
 [ -f "$VISE" ] || {
-	printf 'vise not found at %s\n' "$VISE" >&2
-	exit 2
+    printf 'vise not found at %s\n' "$VISE" >&2
+    exit 2
 }
 CATALOG_SRC="$(dirname "$VISE")/catalog.tsv"
 [ -r "$CATALOG_SRC" ] || {
-	printf 'catalog not found at %s\n' "$CATALOG_SRC" >&2
-	exit 2
+    printf 'catalog not found at %s\n' "$CATALOG_SRC" >&2
+    exit 2
 }
 
 pass=0
 fail=0
 ok() {
-	printf '  \033[32mok\033[0m   %s\n' "$1"
-	pass=$((pass + 1))
+    printf '  \033[32mok\033[0m   %s\n' "$1"
+    pass=$((pass + 1))
 }
 bad() {
-	printf '  \033[31mFAIL\033[0m %s\n' "$1"
-	[ $# -ge 2 ] && printf '       got: %s\n' "$2"
-	fail=$((fail + 1))
+    printf '  \033[31mFAIL\033[0m %s\n' "$1"
+    [ $# -ge 2 ] && printf '       got: %s\n' "$2"
+    fail=$((fail + 1))
 }
 
 # Probe a sandbox-writable base for the symlink fixtures. /tmp may be denied;
 # the $PWD fallback covers a working tree with no usable temp.
 pick_base() {
-	local b d
-	for b in "${TMPDIR:-}" /tmp "$PWD"; do
-		[ -n "$b" ] && [ -d "$b" ] || continue
-		d="$(mktemp -d "$b/vise-smoke.XXXXXX" 2>/dev/null)" || continue
-		printf '%s' "$d"
-		return 0
-	done
-	return 1
+    local b d
+    for b in "${TMPDIR:-}" /tmp "$PWD"; do
+        [ -n "$b" ] && [ -d "$b" ] || continue
+        d="$(mktemp -d "$b/vise-smoke.XXXXXX" 2>/dev/null)" || continue
+        printf '%s' "$d"
+        return 0
+    done
+    return 1
 }
 
 BASE="$(pick_base)" || {
-	printf 'no writable base for symlink fixtures\n' >&2
-	exit 2
+    printf 'no writable base for symlink fixtures\n' >&2
+    exit 2
 }
 trap 'rm -rf "$BASE"' EXIT
 
@@ -63,24 +63,24 @@ printf 'base:  %s\n' "$BASE"
 FIXTURE_COORD="github:kamadorueda/alejandra"
 FIXTURE_KIND="formatter"
 if ! grep -qF "$FIXTURE_COORD" "$CATALOG_SRC"; then
-	printf 'fixture %s not found in %s, pick another\n' "$FIXTURE_COORD" "$CATALOG_SRC" >&2
-	exit 2
+    printf 'fixture %s not found in %s, pick another\n' "$FIXTURE_COORD" "$CATALOG_SRC" >&2
+    exit 2
 fi
 if mise ls --json 2>/dev/null | jq -e --arg c "$FIXTURE_COORD" 'has($c)' >/dev/null 2>&1; then
-	printf 'fixture %s is installed locally, pick another\n' "$FIXTURE_COORD" >&2
-	exit 2
+    printf 'fixture %s is installed locally, pick another\n' "$FIXTURE_COORD" >&2
+    exit 2
 fi
 
 # Runs `<vise_path> list` with the given cwd and prints the fixture's kind
 # column (trimmed), or NOTFOUND if the coordinate has no row at all.
 fixture_kind_via() {
-	local dir="$1" vise_path="$2" raw
-	raw=$(cd "$dir" && bash "$vise_path" list 2>/dev/null | awk -F'\t' -v coord="$FIXTURE_COORD" '
+    local dir="$1" vise_path="$2" raw
+    raw=$(cd "$dir" && bash "$vise_path" list 2>/dev/null | awk -F'\t' -v coord="$FIXTURE_COORD" '
     $1 == coord { print $4; found=1 }
     END { if (!found) print "NOTFOUND" }
   ')
-	# shellcheck disable=SC2086 # word-splitting trims the kind column's padding
-	echo $raw
+    # shellcheck disable=SC2086 # word-splitting trims the kind column's padding
+    echo $raw
 }
 
 REPO_ROOT="$(cd "$(dirname "$VISE")/.." && pwd)"
@@ -88,9 +88,9 @@ REPO_ROOT="$(cd "$(dirname "$VISE")/.." && pwd)"
 # --- direct: bash vise/vise list ---------------------------------------------
 direct_kind="$(fixture_kind_via "$REPO_ROOT" "$VISE")"
 if [ "$direct_kind" = "$FIXTURE_KIND" ]; then
-	ok "direct invocation: catalog resolved ($FIXTURE_COORD -> $FIXTURE_KIND)"
+    ok "direct invocation: catalog resolved ($FIXTURE_COORD -> $FIXTURE_KIND)"
 else
-	bad "direct invocation: catalog resolved ($FIXTURE_COORD -> $FIXTURE_KIND)" "$direct_kind"
+    bad "direct invocation: catalog resolved ($FIXTURE_COORD -> $FIXTURE_KIND)" "$direct_kind"
 fi
 
 # --- hermetic mirror of the repo's bin/vise -> ../vise/vise install shape ----
@@ -104,9 +104,9 @@ ln -s "../vise/vise" "$BASE/pkg/bin/vise"
 # --- (b) via a relative symlink one dir down, mirroring bin/vise ------------
 got="$(fixture_kind_via "$REPO_ROOT" "$BASE/pkg/bin/vise")"
 if [ "$got" = "$FIXTURE_KIND" ]; then
-	ok "one-level symlink (bin/vise-style): catalog resolved"
+    ok "one-level symlink (bin/vise-style): catalog resolved"
 else
-	bad "one-level symlink (bin/vise-style): catalog resolved" "$got"
+    bad "one-level symlink (bin/vise-style): catalog resolved" "$got"
 fi
 
 # --- (c) via a symlink chain: link -> link -> real file ----------------------
@@ -114,18 +114,18 @@ ln -s "$BASE/pkg/vise/vise" "$BASE/pkg/hop1"
 ln -s "hop1" "$BASE/pkg/hop2"
 got="$(fixture_kind_via "$REPO_ROOT" "$BASE/pkg/hop2")"
 if [ "$got" = "$FIXTURE_KIND" ]; then
-	ok "symlink chain (link -> link -> real file): catalog resolved"
+    ok "symlink chain (link -> link -> real file): catalog resolved"
 else
-	bad "symlink chain (link -> link -> real file): catalog resolved" "$got"
+    bad "symlink chain (link -> link -> real file): catalog resolved" "$got"
 fi
 
 # --- (d) invoked from a completely different cwd -----------------------------
 mkdir -p "$BASE/elsewhere"
 got="$(fixture_kind_via "$BASE/elsewhere" "$BASE/pkg/bin/vise")"
 if [ "$got" = "$FIXTURE_KIND" ]; then
-	ok "different cwd: catalog resolved"
+    ok "different cwd: catalog resolved"
 else
-	bad "different cwd: catalog resolved" "$got"
+    bad "different cwd: catalog resolved" "$got"
 fi
 
 # --- empty-selection guards on mutating actions ------------------------------
@@ -140,31 +140,31 @@ fi
 out=$(VISE_DRY_RUN=1 bash "$VISE" __upgrade 2>&1)
 rc=$?
 if [ "$rc" -ne 0 ] && ! printf '%s\n' "$out" | grep -qx 'DRY: mise upgrade' &&
-	printf '%s\n' "$out" | grep -q '^vise: '; then
-	ok "empty upgrade refuses instead of upgrading every installed tool"
+    printf '%s\n' "$out" | grep -q '^vise: '; then
+    ok "empty upgrade refuses instead of upgrading every installed tool"
 else
-	bad "empty upgrade refuses instead of upgrading every installed tool" "rc=$rc out=[$out]"
+    bad "empty upgrade refuses instead of upgrading every installed tool" "rc=$rc out=[$out]"
 fi
 
 # 2. the other mutating actions get the same guard.
 for action in __use-global __use-project __rm; do
-	out=$(VISE_DRY_RUN=1 bash "$VISE" "$action" 2>&1)
-	rc=$?
-	if [ "$rc" -ne 0 ] && ! printf '%s\n' "$out" | grep -q '^DRY: mise ' &&
-		printf '%s\n' "$out" | grep -q '^vise: '; then
-		ok "empty $action refuses (no mutation attempted)"
-	else
-		bad "empty $action refuses (no mutation attempted)" "rc=$rc out=[$out]"
-	fi
+    out=$(VISE_DRY_RUN=1 bash "$VISE" "$action" 2>&1)
+    rc=$?
+    if [ "$rc" -ne 0 ] && ! printf '%s\n' "$out" | grep -q '^DRY: mise ' &&
+        printf '%s\n' "$out" | grep -q '^vise: '; then
+        ok "empty $action refuses (no mutation attempted)"
+    else
+        bad "empty $action refuses (no mutation attempted)" "rc=$rc out=[$out]"
+    fi
 done
 
 # 3. control: a real selection must still go through unguarded — without
 # this, a guard that refuses everything would pass the assertions above too.
 out=$(VISE_DRY_RUN=1 bash "$VISE" __upgrade shfmt 2>&1)
 if printf '%s\n' "$out" | grep -qx 'DRY: mise upgrade shfmt'; then
-	ok "non-empty upgrade still dry-runs"
+    ok "non-empty upgrade still dry-runs"
 else
-	bad "non-empty upgrade still dry-runs" "$out"
+    bad "non-empty upgrade still dry-runs" "$out"
 fi
 
 # --- bash 3.2 compatibility ---------------------------------------------------
@@ -174,23 +174,23 @@ fi
 # only reaches a newer bash if one sits earlier on PATH, so this must hold
 # against /bin/bash directly, not whatever bash happens to be default.
 if [ ! -x /bin/bash ]; then
-	printf '  \033[33mskip\033[0m bash 3.2 compatibility (/bin/bash not present)\n'
+    printf '  \033[33mskip\033[0m bash 3.2 compatibility (/bin/bash not present)\n'
 elif ! /bin/bash -c '((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4)))' 2>/dev/null; then
-	crashed=0
-	for action in __preview __use-global __use-project __upgrade __rm; do
-		out=$(VISE_DRY_RUN=1 /bin/bash "$VISE" "$action" 2>&1)
-		case "$out" in
-		*'unbound variable'*) crashed=1 ;;
-		esac
-	done
-	if [ "$crashed" -eq 0 ]; then
-		ok "empty-selection dispatch survives /bin/bash 3.2 (no unbound variable)"
-	else
-		bad "empty-selection dispatch survives /bin/bash 3.2 (no unbound variable)" "$out"
-	fi
+    crashed=0
+    for action in __preview __use-global __use-project __upgrade __rm; do
+        out=$(VISE_DRY_RUN=1 /bin/bash "$VISE" "$action" 2>&1)
+        case "$out" in
+        *'unbound variable'*) crashed=1 ;;
+        esac
+    done
+    if [ "$crashed" -eq 0 ]; then
+        ok "empty-selection dispatch survives /bin/bash 3.2 (no unbound variable)"
+    else
+        bad "empty-selection dispatch survives /bin/bash 3.2 (no unbound variable)" "$out"
+    fi
 else
-	sys_ver=$(/bin/bash -c 'printf "%s.%s" "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"')
-	printf '  \033[33mskip\033[0m bash 3.2 compatibility (/bin/bash is %s, not pre-4.4)\n' "$sys_ver"
+    sys_ver=$(/bin/bash -c 'printf "%s.%s" "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"')
+    printf '  \033[33mskip\033[0m bash 3.2 compatibility (/bin/bash is %s, not pre-4.4)\n' "$sys_ver"
 fi
 
 # --- default filter: hides uncatalogued rows, keeps real editor tooling -----
@@ -213,8 +213,8 @@ cat >"$FILTER_CATALOG" <<'EOF'
 cargo:rnix-lsp	rnix-lsp	lsp	nix
 EOF
 if mise ls --json 2>/dev/null | jq -e 'has("cargo:rnix-lsp")' >/dev/null 2>&1; then
-	printf 'fixture cargo:rnix-lsp is installed locally, pick another\n' >&2
-	exit 2
+    printf 'fixture cargo:rnix-lsp is installed locally, pick another\n' >&2
+    exit 2
 fi
 
 # kind lives in column 4, right-padded to KIND_W with spaces (vise::render's
@@ -225,17 +225,17 @@ default_out="$(cd "$REPO_ROOT" && VISE_CATALOG="$FILTER_CATALOG" bash "$VISE" li
 
 unclassified=$(printf '%s\n' "$default_out" | kind_field | grep -cx '?') || unclassified=0
 if [ "$unclassified" = "0" ]; then
-	ok "default filter: no uncatalogued (?) rows"
+    ok "default filter: no uncatalogued (?) rows"
 else
-	bad "default filter: no uncatalogued (?) rows" "$unclassified row(s)"
+    bad "default filter: no uncatalogued (?) rows" "$unclassified row(s)"
 fi
 
 # Control for the assertion above: a bug that hides EVERYTHING (not just "?"
 # rows) would pass it too. The fixture's own catalogued tool must survive.
 if printf '%s\n' "$default_out" | awk -F'\t' '$1 == "cargo:rnix-lsp"' | grep -q .; then
-	ok "default filter: still shows real tooling (rnix-lsp)"
+    ok "default filter: still shows real tooling (rnix-lsp)"
 else
-	bad "default filter: still shows real tooling (rnix-lsp)" "$default_out"
+    bad "default filter: still shows real tooling (rnix-lsp)" "$default_out"
 fi
 
 # VISE_FILTER=all needs at least one observed tool outside the fixture catalog
@@ -243,32 +243,32 @@ fi
 # lefthook) guarantees that when run from REPO_ROOT, but check rather than
 # assume — skip instead of failing if the precondition doesn't hold.
 if {
-	mise config ls --json 2>/dev/null | jq -r '.[].tools[]?'
-	mise ls --json 2>/dev/null | jq -r 'keys[]?'
+    mise config ls --json 2>/dev/null | jq -r '.[].tools[]?'
+    mise ls --json 2>/dev/null | jq -r 'keys[]?'
 } |
-	grep -vxF 'cargo:rnix-lsp' | grep -q .; then
-	all_out="$(cd "$REPO_ROOT" && VISE_FILTER=all VISE_CATALOG="$FILTER_CATALOG" bash "$VISE" list 2>&1)"
-	default_n=$(printf '%s\n' "$default_out" | grep -c .) || default_n=0
-	all_n=$(printf '%s\n' "$all_out" | grep -c .) || all_n=0
-	all_unclassified=$(printf '%s\n' "$all_out" | kind_field | grep -cx '?') || all_unclassified=0
-	if [ "$all_n" -gt "$default_n" ] && [ "$all_unclassified" -gt "0" ]; then
-		ok "VISE_FILTER=all widens: more rows, includes uncatalogued (?)"
-	else
-		bad "VISE_FILTER=all widens: more rows, includes uncatalogued (?)" \
-			"default=$default_n all=$all_n unclassified=$all_unclassified"
-	fi
+    grep -vxF 'cargo:rnix-lsp' | grep -q .; then
+    all_out="$(cd "$REPO_ROOT" && VISE_FILTER=all VISE_CATALOG="$FILTER_CATALOG" bash "$VISE" list 2>&1)"
+    default_n=$(printf '%s\n' "$default_out" | grep -c .) || default_n=0
+    all_n=$(printf '%s\n' "$all_out" | grep -c .) || all_n=0
+    all_unclassified=$(printf '%s\n' "$all_out" | kind_field | grep -cx '?') || all_unclassified=0
+    if [ "$all_n" -gt "$default_n" ] && [ "$all_unclassified" -gt "0" ]; then
+        ok "VISE_FILTER=all widens: more rows, includes uncatalogued (?)"
+    else
+        bad "VISE_FILTER=all widens: more rows, includes uncatalogued (?)" \
+            "default=$default_n all=$all_n unclassified=$all_unclassified"
+    fi
 else
-	printf '  \033[33mskip\033[0m VISE_FILTER=all widens (no uncatalogued mise tool observed here)\n'
+    printf '  \033[33mskip\033[0m VISE_FILTER=all widens (no uncatalogued mise tool observed here)\n'
 fi
 
 # VISE_FILTER=tooling explicit must match the new default byte-for-byte: the
 # flip changes which mode starts active, never what "tooling" mode does.
 tooling_out="$(cd "$REPO_ROOT" && VISE_FILTER=tooling VISE_CATALOG="$FILTER_CATALOG" bash "$VISE" list 2>&1)"
 if [ "$tooling_out" = "$default_out" ]; then
-	ok "VISE_FILTER=tooling explicit matches the default"
+    ok "VISE_FILTER=tooling explicit matches the default"
 else
-	bad "VISE_FILTER=tooling explicit matches the default" \
-		"$(diff <(printf '%s\n' "$default_out") <(printf '%s\n' "$tooling_out") | head -5)"
+    bad "VISE_FILTER=tooling explicit matches the default" \
+        "$(diff <(printf '%s\n' "$default_out") <(printf '%s\n' "$tooling_out") | head -5)"
 fi
 
 # --- default filter: the interactive picker seeds the same default ----------
@@ -291,12 +291,12 @@ chmod +x "$STUB_BIN/fzf"
 
 TUI_STATE_OUT="$(mktemp "$BASE/tui-state.XXXXXX")"
 (cd "$REPO_ROOT" && PATH="$STUB_BIN:$PATH" FZF_STUB_OUT="$TUI_STATE_OUT" \
-	VISE_CATALOG="$FILTER_CATALOG" bash "$VISE" >/dev/null 2>&1)
+    VISE_CATALOG="$FILTER_CATALOG" bash "$VISE" >/dev/null 2>&1)
 seeded="$(cat "$TUI_STATE_OUT" 2>/dev/null)"
 if [ "$seeded" = "tooling" ]; then
-	ok "vise::tui seeds VISE_STATE to tooling by default"
+    ok "vise::tui seeds VISE_STATE to tooling by default"
 else
-	bad "vise::tui seeds VISE_STATE to tooling by default" "[$seeded]"
+    bad "vise::tui seeds VISE_STATE to tooling by default" "[$seeded]"
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

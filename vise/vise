@@ -7,22 +7,22 @@ set -euo pipefail
 # readlink -f is GNU-only, hence this loop; a relative target resolves
 # against the link's OWN directory, not the caller's cwd.
 vise::resolve_self() {
-	local p="$1" target dir max=40
-	while [[ -L "$p" ]]; do
-		((max--)) || {
-			printf 'vise: symlink loop resolving %s\n' "$1" >&2
-			exit 1
-		}
-		target="$(readlink "$p")"
-		case "$target" in
-		/*) p="$target" ;;
-		*)
-			dir="$(cd "$(dirname "$p")" && pwd)"
-			p="$dir/$target"
-			;;
-		esac
-	done
-	printf '%s/%s' "$(cd "$(dirname "$p")" && pwd)" "$(basename "$p")"
+    local p="$1" target dir max=40
+    while [[ -L "$p" ]]; do
+        ((max--)) || {
+            printf 'vise: symlink loop resolving %s\n' "$1" >&2
+            exit 1
+        }
+        target="$(readlink "$p")"
+        case "$target" in
+        /*) p="$target" ;;
+        *)
+            dir="$(cd "$(dirname "$p")" && pwd)"
+            p="$dir/$target"
+            ;;
+        esac
+    done
+    printf '%s/%s' "$(cd "$(dirname "$p")" && pwd)" "$(basename "$p")"
 }
 SELF="$(vise::resolve_self "${BASH_SOURCE[0]}")"
 export SELF
@@ -32,8 +32,8 @@ export SELF
 # fresh checkout usable before the first `vise sync`.
 CATALOG_FILE="${VISE_CATALOG:-}"
 if [[ -z "$CATALOG_FILE" ]]; then
-	CATALOG_FILE="$(dirname "$SELF")/catalog.tsv"
-	[[ -r "$CATALOG_FILE" ]] || CATALOG_FILE="$(dirname "$SELF")/catalog-overrides.tsv"
+    CATALOG_FILE="$(dirname "$SELF")/catalog.tsv"
+    [[ -r "$CATALOG_FILE" ]] || CATALOG_FILE="$(dirname "$SELF")/catalog-overrides.tsv"
 fi
 
 CATALOG_OUT="$(dirname "$SELF")/catalog.tsv"
@@ -54,32 +54,32 @@ STARS_W=7
 # fzf reads on reload. Inside the picker stderr would scribble over the screen,
 # so tui() redirects them to a file instead (see VISE_LOG_FILE).
 vise::log() {
-	[[ "${VISE_VERBOSE:-0}" == "1" ]] || return 0
-	if [[ -n "${VISE_LOG_FILE:-}" ]]; then
-		printf 'vise: %s\n' "$*" >>"$VISE_LOG_FILE"
-	else
-		printf 'vise: %s\n' "$*" >&2
-	fi
+    [[ "${VISE_VERBOSE:-0}" == "1" ]] || return 0
+    if [[ -n "${VISE_LOG_FILE:-}" ]]; then
+        printf 'vise: %s\n' "$*" >>"$VISE_LOG_FILE"
+    else
+        printf 'vise: %s\n' "$*" >&2
+    fi
 }
 
 vise::debug() {
-	[[ "${VISE_DEBUG:-0}" == "1" ]] || return 0
-	if [[ -n "${VISE_LOG_FILE:-}" ]]; then
-		printf 'vise[debug]: %s\n' "$*" >>"$VISE_LOG_FILE"
-	else
-		printf 'vise[debug]: %s\n' "$*" >&2
-	fi
+    [[ "${VISE_DEBUG:-0}" == "1" ]] || return 0
+    if [[ -n "${VISE_LOG_FILE:-}" ]]; then
+        printf 'vise[debug]: %s\n' "$*" >>"$VISE_LOG_FILE"
+    else
+        printf 'vise[debug]: %s\n' "$*" >&2
+    fi
 }
 
 # Milliseconds. EPOCHREALTIME is bash 5+; the separator is locale-dependent,
 # hence the character class.
 vise::now_ms() {
-	local t=${EPOCHREALTIME/[.,]/}
-	printf '%s' "$((t / 1000))"
+    local t=${EPOCHREALTIME/[.,]/}
+    printf '%s' "$((t / 1000))"
 }
 
 vise::usage() {
-	cat <<'EOF'
+    cat <<'EOF'
 vise — browse and manage mise-installed LSPs, linters and formatters.
 
 USAGE
@@ -127,27 +127,27 @@ EOF
 # Single choke point for every mise command that writes state, so
 # VISE_DRY_RUN can intercept all of them without touching real config.
 vise::mutate() {
-	if [[ "${VISE_DRY_RUN:-0}" == "1" ]]; then
-		printf 'DRY: %s\n' "$*" >&2
-		return 0
-	fi
-	vise::debug "exec: $*"
-	"$@"
+    if [[ "${VISE_DRY_RUN:-0}" == "1" ]]; then
+        printf 'DRY: %s\n' "$*" >&2
+        return 0
+    fi
+    vise::debug "exec: $*"
+    "$@"
 }
 
 # Rows marked unavailable are listed for parity with the upstream registry but
 # ship through an ecosystem mise has no backend for. Fail with the reason
 # rather than handing mise a coordinate it cannot parse.
 vise::reject_unavailable() {
-	local c rc=0
-	for c in "$@"; do
-		if [[ "$c" == unavailable:* ]]; then
-			printf 'vise: %s has no mise backend (upstream ships it via composer/luarocks/opam/openvsx)\n' \
-				"${c#unavailable:}" >&2
-			rc=1
-		fi
-	done
-	return "$rc"
+    local c rc=0
+    for c in "$@"; do
+        if [[ "$c" == unavailable:* ]]; then
+            printf 'vise: %s has no mise backend (upstream ships it via composer/luarocks/opam/openvsx)\n' \
+                "${c#unavailable:}" >&2
+            rc=1
+        fi
+    done
+    return "$rc"
 }
 
 # fzf's {+1}/{+} placeholders expand to nothing when the filter matches zero
@@ -157,12 +157,12 @@ vise::reject_unavailable() {
 # that behavior differs per subcommand, so it cannot be relied on. Refuse
 # here instead.
 vise::require_selection() {
-	local action="$1"
-	shift
-	if (($# == 0)); then
-		printf 'vise: no tool selected, refusing to %s\n' "$action" >&2
-		return 1
-	fi
+    local action="$1"
+    shift
+    if (($# == 0)); then
+        printf 'vise: no tool selected, refusing to %s\n' "$action" >&2
+        return 1
+    fi
 }
 
 vise::use_global() { vise::require_selection "use-global" "$@" && vise::reject_unavailable "$@" && vise::mutate mise use -g "$@"; }
@@ -173,55 +173,55 @@ vise::upgrade() { vise::require_selection "upgrade" "$@" && vise::reject_unavail
 # so a mixed-scope multi-select removes every tool from its correct config
 # file instead of applying one row's flag to the whole batch.
 vise::rm() {
-	vise::require_selection "rm" "$@" || return 1
-	local coord scope
-	for coord in "$@"; do
-		scope=$(vise::scope_of "$coord")
-		vise::log "remove $coord (scope: $scope)"
-		case "$scope" in
-		both)
-			vise::mutate mise rm -g "$coord"
-			vise::mutate mise rm "$coord"
-			;;
-		global)
-			vise::mutate mise rm -g "$coord"
-			;;
-		project)
-			vise::mutate mise rm "$coord"
-			;;
-		none)
-			printf 'vise: %s is not tracked in any config, skipping\n' "$coord" >&2
-			;;
-		esac
-	done
+    vise::require_selection "rm" "$@" || return 1
+    local coord scope
+    for coord in "$@"; do
+        scope=$(vise::scope_of "$coord")
+        vise::log "remove $coord (scope: $scope)"
+        case "$scope" in
+        both)
+            vise::mutate mise rm -g "$coord"
+            vise::mutate mise rm "$coord"
+            ;;
+        global)
+            vise::mutate mise rm -g "$coord"
+            ;;
+        project)
+            vise::mutate mise rm "$coord"
+            ;;
+        none)
+            printf 'vise: %s is not tracked in any config, skipping\n' "$coord" >&2
+            ;;
+        esac
+    done
 }
 
 # Honours MISE_GLOBAL_CONFIG_FILE and XDG_CONFIG_HOME, and resolves symlinks:
 # a dotfile manager (chezmoi, stow) makes mise report the real store path, and
 # a plain "~/.config/mise/" prefix test would then misfile global as project.
 vise::global_config() {
-	local p="${MISE_GLOBAL_CONFIG_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/mise/config.toml}"
-	realpath "$p" 2>/dev/null || printf '%s\n' "$p"
+    local p="${MISE_GLOBAL_CONFIG_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/mise/config.toml}"
+    realpath "$p" 2>/dev/null || printf '%s\n' "$p"
 }
 
 # mise's own paths get resolved the same way so both sides of the comparison
 # are canonical.
 vise::config_json() {
-	local raw resolved
-	raw=$(mise config ls --json)
-	resolved=$(printf '%s' "$raw" | jq -r '.[].path' | while IFS= read -r p; do
-		realpath "$p" 2>/dev/null || printf '%s\n' "$p"
-	done | jq -Rn '[inputs]')
-	jq -cn --argjson c "$raw" --argjson r "$resolved" \
-		'[range($c | length) | $c[.] + {path: $r[.]}]'
+    local raw resolved
+    raw=$(mise config ls --json)
+    resolved=$(printf '%s' "$raw" | jq -r '.[].path' | while IFS= read -r p; do
+        realpath "$p" 2>/dev/null || printf '%s\n' "$p"
+    done | jq -Rn '[inputs]')
+    jq -cn --argjson c "$raw" --argjson r "$resolved" \
+        '[range($c | length) | $c[.] + {path: $r[.]}]'
 }
 
 # Scope (global/project/both/none) comes from mise config ls --json, per the
 # join rule: a coordinate's scope is which config file(s) list it, not
 # whether it happens to be installed.
 vise::scope_of() {
-	local coord="$1"
-	vise::config_json | jq -r --arg coord "$coord" --arg global_cfg "$(vise::global_config)" '
+    local coord="$1"
+    vise::config_json | jq -r --arg coord "$coord" --arg global_cfg "$(vise::global_config)" '
     (reduce .[] as $e ({global: [], project: []};
       if ($e.path == $global_cfg)
       then .global += $e.tools
@@ -241,26 +241,26 @@ vise::scope_of() {
 # subshell per bind can't mutate the parent fzf process's environment, so
 # the toggle has to live on disk rather than in a variable.
 vise::toggle_filter() {
-	local state_file="${VISE_STATE:?vise: VISE_STATE is required for __toggle-filter}"
-	local current
-	current=$(cat "$state_file" 2>/dev/null || echo all)
-	if [[ "$current" == "tooling" ]]; then
-		echo all >"$state_file"
-	else
-		echo tooling >"$state_file"
-	fi
+    local state_file="${VISE_STATE:?vise: VISE_STATE is required for __toggle-filter}"
+    local current
+    current=$(cat "$state_file" 2>/dev/null || echo all)
+    if [[ "$current" == "tooling" ]]; then
+        echo all >"$state_file"
+    else
+        echo tooling >"$state_file"
+    fi
 }
 
 # all -> global -> project -> all. Same on-disk trick as toggle_filter.
 vise::cycle_scope() {
-	local state_file="${VISE_SCOPE_STATE:?vise: VISE_SCOPE_STATE is required for __cycle-scope}"
-	local current
-	current=$(cat "$state_file" 2>/dev/null || echo all)
-	case "$current" in
-	all) echo global >"$state_file" ;;
-	global) echo project >"$state_file" ;;
-	*) echo all >"$state_file" ;;
-	esac
+    local state_file="${VISE_SCOPE_STATE:?vise: VISE_SCOPE_STATE is required for __cycle-scope}"
+    local current
+    current=$(cat "$state_file" 2>/dev/null || echo all)
+    case "$current" in
+    all) echo global >"$state_file" ;;
+    global) echo project >"$state_file" ;;
+    *) echo all >"$state_file" ;;
+    esac
 }
 
 # Explicit arg wins, then the on-disk toggle state, then the env default. The
@@ -271,61 +271,61 @@ vise::cycle_scope() {
 # everything mise manages) — ctrl-a widens to "all" when one of those needs
 # managing here too.
 vise::filter_mode() {
-	local mode="${1:-}"
-	if [[ -z "$mode" && -n "${VISE_STATE:-}" && -r "${VISE_STATE:-}" ]]; then
-		mode=$(<"$VISE_STATE")
-	fi
-	printf '%s\n' "${mode:-${VISE_FILTER:-tooling}}"
+    local mode="${1:-}"
+    if [[ -z "$mode" && -n "${VISE_STATE:-}" && -r "${VISE_STATE:-}" ]]; then
+        mode=$(<"$VISE_STATE")
+    fi
+    printf '%s\n' "${mode:-${VISE_FILTER:-tooling}}"
 }
 
 vise::scope_mode() {
-	local mode="${1:-}"
-	if [[ -z "$mode" && -n "${VISE_SCOPE_STATE:-}" && -r "${VISE_SCOPE_STATE:-}" ]]; then
-		mode=$(<"$VISE_SCOPE_STATE")
-	fi
-	printf '%s\n' "${mode:-${VISE_SCOPE:-all}}"
+    local mode="${1:-}"
+    if [[ -z "$mode" && -n "${VISE_SCOPE_STATE:-}" && -r "${VISE_SCOPE_STATE:-}" ]]; then
+        mode=$(<"$VISE_SCOPE_STATE")
+    fi
+    printf '%s\n' "${mode:-${VISE_SCOPE:-all}}"
 }
 
 # macOS "open"; xdg-open elsewhere. Silent no-op when the row has no homepage
 # so ctrl-o on an uncatalogued tool does nothing instead of erroring.
 vise::open_url() {
-	local url="${1:-}"
-	if [[ -z "$url" || "$url" == "-" ]]; then
-		vise::log "no homepage for this row, nothing to open"
-		return 0
-	fi
-	vise::log "opening $url"
-	if command -v open >/dev/null 2>&1; then
-		open "$url"
-	elif command -v xdg-open >/dev/null 2>&1; then
-		xdg-open "$url"
-	fi
+    local url="${1:-}"
+    if [[ -z "$url" || "$url" == "-" ]]; then
+        vise::log "no homepage for this row, nothing to open"
+        return 0
+    fi
+    vise::log "opening $url"
+    if command -v open >/dev/null 2>&1; then
+        open "$url"
+    elif command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "$url"
+    fi
 }
 
 vise::prompt() {
-	local scope filter suffix=""
-	scope=$(vise::scope_mode)
-	filter=$(vise::filter_mode)
-	[[ "$filter" == "tooling" ]] && suffix=" +tooling"
-	printf 'vise %s%s> ' "$scope" "$suffix"
+    local scope filter suffix=""
+    scope=$(vise::scope_mode)
+    filter=$(vise::filter_mode)
+    [[ "$filter" == "tooling" ]] && suffix=" +tooling"
+    printf 'vise %s%s> ' "$scope" "$suffix"
 }
 
 vise::render() {
-	local filter_mode scope_mode
-	filter_mode=$(vise::filter_mode "${1:-}")
-	scope_mode=$(vise::scope_mode "${2:-}")
+    local filter_mode scope_mode
+    filter_mode=$(vise::filter_mode "${1:-}")
+    scope_mode=$(vise::scope_mode "${2:-}")
 
-	local catalog_file="$CATALOG_FILE"
-	if [[ -r "$catalog_file" ]]; then
-		vise::log "catalog $catalog_file ($(grep -cvE '^[[:space:]]*(#|$)' "$catalog_file") rows)"
-	else
-		vise::log "no catalog at $catalog_file, listing installed tools only"
-		catalog_file=/dev/null
-	fi
-	vise::log "filter=$filter_mode scope=$scope_mode"
+    local catalog_file="$CATALOG_FILE"
+    if [[ -r "$catalog_file" ]]; then
+        vise::log "catalog $catalog_file ($(grep -cvE '^[[:space:]]*(#|$)' "$catalog_file") rows)"
+    else
+        vise::log "no catalog at $catalog_file, listing installed tools only"
+        catalog_file=/dev/null
+    fi
+    vise::log "filter=$filter_mode scope=$scope_mode"
 
-	local catalog_json config_json ls_json registry_json
-	catalog_json=$(jq -R -n '
+    local catalog_json config_json ls_json registry_json
+    catalog_json=$(jq -R -n '
     [inputs
       | select(length > 0)
       | select(startswith("#") | not)
@@ -337,31 +337,31 @@ vise::render() {
          homepage: (.[4] // "-"), stars: (.[5] // "-"), updated: (.[6] // "-"),
          description: (.[7] // "-")}]
   ' "$catalog_file")
-	local t0
-	t0=$(vise::now_ms)
-	config_json=$(vise::config_json)
-	vise::debug "mise config ls  $(($(vise::now_ms) - t0))ms"
-	t0=$(vise::now_ms)
-	ls_json=$(mise ls --json)
-	vise::debug "mise ls         $(($(vise::now_ms) - t0))ms"
-	t0=$(vise::now_ms)
-	registry_json=$(mise registry --json)
-	vise::debug "mise registry   $(($(vise::now_ms) - t0))ms"
-	vise::debug "global config   $(vise::global_config)"
+    local t0
+    t0=$(vise::now_ms)
+    config_json=$(vise::config_json)
+    vise::debug "mise config ls  $(($(vise::now_ms) - t0))ms"
+    t0=$(vise::now_ms)
+    ls_json=$(mise ls --json)
+    vise::debug "mise ls         $(($(vise::now_ms) - t0))ms"
+    t0=$(vise::now_ms)
+    registry_json=$(mise registry --json)
+    vise::debug "mise registry   $(($(vise::now_ms) - t0))ms"
+    vise::debug "global config   $(vise::global_config)"
 
-	jq -rn \
-		--argjson catalog "$catalog_json" \
-		--argjson config "$config_json" \
-		--argjson lsdata "$ls_json" \
-		--argjson registry "$registry_json" \
-		--arg global_cfg "$(vise::global_config)" \
-		--arg filter_mode "$filter_mode" \
-		--arg scope_mode "$scope_mode" \
-		--argjson name_w "$NAME_W" \
-		--argjson kind_w "$KIND_W" \
-		--argjson lang_w "$LANG_W" \
-		--argjson ver_w "$VER_W" \
-		--argjson stars_w "$STARS_W" '
+    jq -rn \
+        --argjson catalog "$catalog_json" \
+        --argjson config "$config_json" \
+        --argjson lsdata "$ls_json" \
+        --argjson registry "$registry_json" \
+        --arg global_cfg "$(vise::global_config)" \
+        --arg filter_mode "$filter_mode" \
+        --arg scope_mode "$scope_mode" \
+        --argjson name_w "$NAME_W" \
+        --argjson kind_w "$KIND_W" \
+        --argjson lang_w "$LANG_W" \
+        --argjson ver_w "$VER_W" \
+        --argjson stars_w "$STARS_W" '
     # Character-based padding: printf %-*.*s pads/truncates by byte, and the
     # glyphs (and any non-ASCII catalog text) are multi-byte UTF-8, so a byte
     # cut can slice one in half. jq string length/slicing is codepoint-based.
@@ -463,13 +463,13 @@ vise::render() {
 }
 
 vise::list() {
-	vise::render
+    vise::render
 }
 
 vise::trim() {
-	local s="$*"
-	s="${s#"${s%%[![:space:]]*}"}"
-	printf '%s' "${s%"${s##*[![:space:]]}"}"
+    local s="$*"
+    s="${s#"${s%%[![:space:]]*}"}"
+    printf '%s' "${s%"${s##*[![:space:]]}"}"
 }
 
 vise::field() { printf '%-12s %s\n' "$1" "$2"; }
@@ -479,47 +479,47 @@ vise::field() { printf '%-12s %s\n' "$1" "$2"; }
 # tool whose installed coordinate differs from the catalog's spelling. Values
 # come in display-padded, so each is trimmed back here.
 vise::preview() {
-	local coord scope name kind lang version stars homepage updated description
-	coord=$(vise::trim "${1:-}")
-	scope=$(vise::trim "${2:-}")
-	name=$(vise::trim "${3:-}")
-	kind=$(vise::trim "${4:-}")
-	lang=$(vise::trim "${5:-}")
-	version=$(vise::trim "${6:-}")
-	stars=$(vise::trim "${7:-}")
-	homepage=$(vise::trim "${8:-}")
-	updated=$(vise::trim "${9:-}")
-	description=$(vise::trim "${10:-}")
-	name="${name#* }" # drop the leading status glyph
+    local coord scope name kind lang version stars homepage updated description
+    coord=$(vise::trim "${1:-}")
+    scope=$(vise::trim "${2:-}")
+    name=$(vise::trim "${3:-}")
+    kind=$(vise::trim "${4:-}")
+    lang=$(vise::trim "${5:-}")
+    version=$(vise::trim "${6:-}")
+    stars=$(vise::trim "${7:-}")
+    homepage=$(vise::trim "${8:-}")
+    updated=$(vise::trim "${9:-}")
+    description=$(vise::trim "${10:-}")
+    name="${name#* }" # drop the leading status glyph
 
-	local width="${FZF_PREVIEW_COLUMNS:-78}"
+    local width="${FZF_PREVIEW_COLUMNS:-78}"
 
-	vise::field name "$name"
-	vise::field kind "$kind"
-	vise::field language "$lang"
-	vise::field coordinate "$coord"
-	vise::field scope "$scope"
-	[[ "$version" != "-" ]] && vise::field version "$version"
-	if [[ "$description" != "-" && -n "$description" ]]; then
-		printf '\n'
-		printf '%s\n' "$description" | fold -s -w "$width"
-	fi
+    vise::field name "$name"
+    vise::field kind "$kind"
+    vise::field language "$lang"
+    vise::field coordinate "$coord"
+    vise::field scope "$scope"
+    [[ "$version" != "-" ]] && vise::field version "$version"
+    if [[ "$description" != "-" && -n "$description" ]]; then
+        printf '\n'
+        printf '%s\n' "$description" | fold -s -w "$width"
+    fi
 
-	if [[ "$homepage" != "-" || "$stars" != "-" ]]; then
-		printf '\n%s\n' "$(printf '─%.0s' $(seq 1 "$width"))"
-		[[ "$homepage" != "-" ]] && vise::field url "$homepage"
-		[[ "$stars" != "-" ]] && vise::field stars "$stars"
-		[[ "$updated" != "-" ]] && vise::field "last push" "$updated"
-	fi
+    if [[ "$homepage" != "-" || "$stars" != "-" ]]; then
+        printf '\n%s\n' "$(printf '─%.0s' $(seq 1 "$width"))"
+        [[ "$homepage" != "-" ]] && vise::field url "$homepage"
+        [[ "$stars" != "-" ]] && vise::field stars "$stars"
+        [[ "$updated" != "-" ]] && vise::field "last push" "$updated"
+    fi
 
-	local ls_out
-	ls_out=$(mise ls "$coord" 2>/dev/null || true)
-	printf '\n%s\n' "$(printf '─%.0s' $(seq 1 "$width"))"
-	if [[ -z "$ls_out" ]]; then
-		echo "(not installed)"
-	else
-		printf '%s\n' "$ls_out"
-	fi
+    local ls_out
+    ls_out=$(mise ls "$coord" 2>/dev/null || true)
+    printf '\n%s\n' "$(printf '─%.0s' $(seq 1 "$width"))"
+    if [[ -z "$ls_out" ]]; then
+        echo "(not installed)"
+    else
+        printf '%s\n' "$ls_out"
+    fi
 }
 
 # Rebuilds catalog.tsv. The only command here that touches the network — the picker
@@ -530,26 +530,26 @@ vise::preview() {
 # registry holds ~85 editor tools out of 999, so it supplies nicer names, not
 # the list. GitHub supplies stars and last-push for the ~2/3 hosted there.
 vise::sync() {
-	local out="${1:-$CATALOG_OUT}"
-	local overrides="$OVERRIDES_FILE"
-	[[ -r "$overrides" ]] || overrides=/dev/null
-	local gh_cache="$CACHE_DIR/gh-meta.tsv"
+    local out="${1:-$CATALOG_OUT}"
+    local overrides="$OVERRIDES_FILE"
+    [[ -r "$overrides" ]] || overrides=/dev/null
+    local gh_cache="$CACHE_DIR/gh-meta.tsv"
 
-	mkdir -p "$CACHE_DIR"
-	vise::log "cache $CACHE_DIR"
-	vise::log "downloading Mason registry"
-	local t0
-	t0=$(vise::now_ms)
-	curl -fsSL -o "$CACHE_DIR/registry.json.zip" "$MASON_URL"
-	unzip -oq "$CACHE_DIR/registry.json.zip" -d "$CACHE_DIR"
-	vise::debug "download+unzip  $(($(vise::now_ms) - t0))ms"
-	vise::log "Mason packages: $(jq length "$CACHE_DIR/registry.json")"
-	mise registry --json >"$CACHE_DIR/mise-registry.json"
-	vise::log "mise registry shorthands: $(jq length "$CACHE_DIR/mise-registry.json")"
+    mkdir -p "$CACHE_DIR"
+    vise::log "cache $CACHE_DIR"
+    vise::log "downloading Mason registry"
+    local t0
+    t0=$(vise::now_ms)
+    curl -fsSL -o "$CACHE_DIR/registry.json.zip" "$MASON_URL"
+    unzip -oq "$CACHE_DIR/registry.json.zip" -d "$CACHE_DIR"
+    vise::debug "download+unzip  $(($(vise::now_ms) - t0))ms"
+    vise::log "Mason packages: $(jq length "$CACHE_DIR/registry.json")"
+    mise registry --json >"$CACHE_DIR/mise-registry.json"
+    vise::log "mise registry shorthands: $(jq length "$CACHE_DIR/mise-registry.json")"
 
-	jq -rn \
-		--slurpfile mason "$CACHE_DIR/registry.json" \
-		--slurpfile mise "$CACHE_DIR/mise-registry.json" '
+    jq -rn \
+        --slurpfile mason "$CACHE_DIR/registry.json" \
+        --slurpfile mise "$CACHE_DIR/mise-registry.json" '
     ($mise[0] | map(.short) | INDEX(.)) as $shorts
     | [ $mason[0][]
         | select(.categories | any(. == "LSP" or . == "Linter" or . == "Formatter"))
@@ -590,14 +590,14 @@ vise::sync() {
     | [.coord, .name, .kind, .language, .homepage, "-", "-", .description]
     | @tsv
   ' >"$CACHE_DIR/base.tsv"
-	vise::log "editor tools from Mason: $(wc -l <"$CACHE_DIR/base.tsv" | tr -d ' ')"
-	vise::debug "unavailable (no mise backend): $(awk -F'\t' '$1 ~ /^unavailable:/' "$CACHE_DIR/base.tsv" | wc -l | tr -d ' ')"
+    vise::log "editor tools from Mason: $(wc -l <"$CACHE_DIR/base.tsv" | tr -d ' ')"
+    vise::debug "unavailable (no mise backend): $(awk -F'\t' '$1 ~ /^unavailable:/' "$CACHE_DIR/base.tsv" | wc -l | tr -d ' ')"
 
-	# The overrides file wins on coordinate/kind/language: it holds
-	# hand-verified install paths for tools whose Mason PURL points somewhere
-	# mise cannot reach (jdtls, omnisharp, kotlin-language-server are
-	# "generic" upstream).
-	awk -F'\t' -v OFS='\t' -v overrides="$overrides" '
+    # The overrides file wins on coordinate/kind/language: it holds
+    # hand-verified install paths for tools whose Mason PURL points somewhere
+    # mise cannot reach (jdtls, omnisharp, kotlin-language-server are
+    # "generic" upstream).
+    awk -F'\t' -v OFS='\t' -v overrides="$overrides" '
     BEGIN {
       while ((getline line < overrides) > 0) {
         if (line ~ /^[[:space:]]*(#|$)/) continue
@@ -611,43 +611,43 @@ vise::sync() {
     }
     END { for (n in coord) if (!(n in seen)) print coord[n], n, kind[n], lang[n], "-", "-", "-", "-" }
   ' "$CACHE_DIR/base.tsv" >"$CACHE_DIR/merged.tsv"
-	vise::log "after merging $overrides: $(wc -l <"$CACHE_DIR/merged.tsv" | tr -d ' ') rows"
+    vise::log "after merging $overrides: $(wc -l <"$CACHE_DIR/merged.tsv" | tr -d ' ') rows"
 
-	# Stars are a nice-to-have, never a hard dependency: any problem here
-	# degrades to "-" in those two columns and the catalog is still complete.
-	touch "$gh_cache"
-	local gh_ok=1
-	if [[ "${VISE_NO_GH:-0}" == "1" ]]; then
-		gh_ok=0
-		printf 'note: VISE_NO_GH=1, skipping stars and last-updated\n' >&2
-	elif ! command -v gh >/dev/null 2>&1; then
-		gh_ok=0
-		printf 'warning: gh not installed, skipping stars and last-updated\n' >&2
-	elif ! gh auth status >/dev/null 2>&1; then
-		gh_ok=0
-		printf 'warning: gh not authenticated (run: gh auth login), skipping stars\n' >&2
-	fi
+    # Stars are a nice-to-have, never a hard dependency: any problem here
+    # degrades to "-" in those two columns and the catalog is still complete.
+    touch "$gh_cache"
+    local gh_ok=1
+    if [[ "${VISE_NO_GH:-0}" == "1" ]]; then
+        gh_ok=0
+        printf 'note: VISE_NO_GH=1, skipping stars and last-updated\n' >&2
+    elif ! command -v gh >/dev/null 2>&1; then
+        gh_ok=0
+        printf 'warning: gh not installed, skipping stars and last-updated\n' >&2
+    elif ! gh auth status >/dev/null 2>&1; then
+        gh_ok=0
+        printf 'warning: gh not authenticated (run: gh auth login), skipping stars\n' >&2
+    fi
 
-	if [[ "$gh_ok" == "1" ]]; then
-		awk -F'\t' '$5 ~ /^https:\/\/github\.com\/[^\/]+\/[^\/]+\/?$/ {
+    if [[ "$gh_ok" == "1" ]]; then
+        awk -F'\t' '$5 ~ /^https:\/\/github\.com\/[^\/]+\/[^\/]+\/?$/ {
       n = split($5, p, "/"); repo = p[4] "/" p[5]; sub(/\/$/, "", repo); print repo
     }' "$CACHE_DIR/merged.tsv" | sort -u >"$CACHE_DIR/repos.txt"
-		cut -f1 "$gh_cache" | sort -u >"$CACHE_DIR/have.txt"
-		comm -23 "$CACHE_DIR/repos.txt" "$CACHE_DIR/have.txt" >"$CACHE_DIR/need.txt"
-		printf 'fetching GitHub metadata for %s repos (%s cached)\n' \
-			"$(grep -c . "$CACHE_DIR/need.txt" || true)" \
-			"$(grep -c . "$CACHE_DIR/have.txt" || true)" >&2
-		# A 404 (repo moved or renamed) must not abort the whole sync.
-		xargs -P 8 -I{} sh -c \
-			'gh api "repos/{}" --jq "\"{}\t\(.stargazers_count)\t\(.pushed_at[0:10])\"" 2>/dev/null || true' \
-			<"$CACHE_DIR/need.txt" >>"$gh_cache"
-	fi
+        cut -f1 "$gh_cache" | sort -u >"$CACHE_DIR/have.txt"
+        comm -23 "$CACHE_DIR/repos.txt" "$CACHE_DIR/have.txt" >"$CACHE_DIR/need.txt"
+        printf 'fetching GitHub metadata for %s repos (%s cached)\n' \
+            "$(grep -c . "$CACHE_DIR/need.txt" || true)" \
+            "$(grep -c . "$CACHE_DIR/have.txt" || true)" >&2
+        # A 404 (repo moved or renamed) must not abort the whole sync.
+        xargs -P 8 -I{} sh -c \
+            'gh api "repos/{}" --jq "\"{}\t\(.stargazers_count)\t\(.pushed_at[0:10])\"" 2>/dev/null || true' \
+            <"$CACHE_DIR/need.txt" >>"$gh_cache"
+    fi
 
-	{
-		printf '# coordinate\tname\tkind\tlanguage\thomepage\tstars\tupdated\tdescription\n'
-		printf '# Generated by "vise sync" from the Mason registry, mise registry and GitHub.\n'
-		printf '# Do not hand-edit; edits are lost on sync. Use catalog-overrides.tsv instead.\n'
-		awk -F'\t' -v OFS='\t' -v ghc="$gh_cache" '
+    {
+        printf '# coordinate\tname\tkind\tlanguage\thomepage\tstars\tupdated\tdescription\n'
+        printf '# Generated by "vise sync" from the Mason registry, mise registry and GitHub.\n'
+        printf '# Do not hand-edit; edits are lost on sync. Use catalog-overrides.tsv instead.\n'
+        awk -F'\t' -v OFS='\t' -v ghc="$gh_cache" '
       BEGIN {
         while ((getline line < ghc) > 0) {
           split(line, g, "\t")
@@ -661,75 +661,75 @@ vise::sync() {
         print
       }
     ' "$CACHE_DIR/merged.tsv" | sort -t"$(printf '\t')" -k2,2f
-	} >"$out"
+    } >"$out"
 
-	printf 'wrote %s (%s tools, %s with stars)\n' \
-		"$out" "$(grep -cvE '^#' "$out")" \
-		"$(awk -F'\t' '!/^#/ && $6 != "-"' "$out" | wc -l | tr -d ' ')" >&2
+    printf 'wrote %s (%s tools, %s with stars)\n' \
+        "$out" "$(grep -cvE '^#' "$out")" \
+        "$(awk -F'\t' '!/^#/ && $6 != "-"' "$out" | wc -l | tr -d ' ')" >&2
 }
 
 vise::tui() {
-	local self_q
-	self_q=${SELF@Q}
+    local self_q
+    self_q=${SELF@Q}
 
-	# execute() switches to the alt screen and switches straight back once the
-	# command exits, so a mise error would flash and vanish without this pause.
-	local pause='; echo; read -r -p "Press enter to continue..." _dummy'
+    # execute() switches to the alt screen and switches straight back once the
+    # command exits, so a mise error would flash and vanish without this pause.
+    local pause='; echo; read -r -p "Press enter to continue..." _dummy'
 
-	# ctrl-a's toggle state lives in this file (see vise::toggle_filter):
-	# fzf binds run in fresh subshells and can't mutate this process's
-	# environment, but they all inherit VISE_STATE and can read/write the
-	# file it points at.
-	local state_dir
-	state_dir=$(mktemp -d)
-	trap 'rm -rf "$state_dir"' EXIT
+    # ctrl-a's toggle state lives in this file (see vise::toggle_filter):
+    # fzf binds run in fresh subshells and can't mutate this process's
+    # environment, but they all inherit VISE_STATE and can read/write the
+    # file it points at.
+    local state_dir
+    state_dir=$(mktemp -d)
+    trap 'rm -rf "$state_dir"' EXIT
 
-	# fzf owns the screen; anything on stderr would corrupt it. Keep the log
-	# outside the temp dir so it survives the trap and can be read afterwards.
-	if [[ "$VISE_VERBOSE" == "1" && -z "${VISE_LOG_FILE:-}" ]]; then
-		VISE_LOG_FILE="${TMPDIR:-/tmp}/vise-$$.log"
-		export VISE_LOG_FILE
-		: >"$VISE_LOG_FILE"
-		printf 'vise: logging to %s\n' "$VISE_LOG_FILE" >&2
-	fi
-	VISE_STATE="$state_dir/filter"
-	export VISE_STATE
-	# Must agree with vise::filter_mode's own fallback, or the prompt and the
-	# renderer would start disagreeing about which mode is active.
-	echo "${VISE_FILTER:-tooling}" >"$VISE_STATE"
-	VISE_SCOPE_STATE="$state_dir/scope"
-	export VISE_SCOPE_STATE
-	echo "${VISE_SCOPE:-all}" >"$VISE_SCOPE_STATE"
+    # fzf owns the screen; anything on stderr would corrupt it. Keep the log
+    # outside the temp dir so it survives the trap and can be read afterwards.
+    if [[ "$VISE_VERBOSE" == "1" && -z "${VISE_LOG_FILE:-}" ]]; then
+        VISE_LOG_FILE="${TMPDIR:-/tmp}/vise-$$.log"
+        export VISE_LOG_FILE
+        : >"$VISE_LOG_FILE"
+        printf 'vise: logging to %s\n' "$VISE_LOG_FILE" >&2
+    fi
+    VISE_STATE="$state_dir/filter"
+    export VISE_STATE
+    # Must agree with vise::filter_mode's own fallback, or the prompt and the
+    # renderer would start disagreeing about which mode is active.
+    echo "${VISE_FILTER:-tooling}" >"$VISE_STATE"
+    VISE_SCOPE_STATE="$state_dir/scope"
+    export VISE_SCOPE_STATE
+    echo "${VISE_SCOPE:-all}" >"$VISE_SCOPE_STATE"
 
-	local bind_global="ctrl-g:execute(${self_q} __use-global {+1}${pause})+reload(${self_q} __render)"
-	local bind_project="ctrl-t:execute(${self_q} __use-project {+1}${pause})+reload(${self_q} __render)"
-	local bind_remove="ctrl-x:execute(${self_q} __rm {+1}${pause})+reload(${self_q} __render)"
-	local bind_upgrade="ctrl-u:execute(${self_q} __upgrade {+1}${pause})+reload(${self_q} __render)"
-	local bind_reload="ctrl-r:reload(${self_q} __render)"
-	local bind_filter_toggle="ctrl-a:execute-silent(${self_q} __toggle-filter)+reload(${self_q} __render)+transform-prompt(${self_q} __prompt)"
-	local bind_open="ctrl-o:execute-silent(${self_q} __open {8})"
-	local bind_scope_cycle="ctrl-s:execute-silent(${self_q} __cycle-scope)+reload(${self_q} __render)+transform-prompt(${self_q} __prompt)"
+    local bind_global="ctrl-g:execute(${self_q} __use-global {+1}${pause})+reload(${self_q} __render)"
+    local bind_project="ctrl-t:execute(${self_q} __use-project {+1}${pause})+reload(${self_q} __render)"
+    local bind_remove="ctrl-x:execute(${self_q} __rm {+1}${pause})+reload(${self_q} __render)"
+    local bind_upgrade="ctrl-u:execute(${self_q} __upgrade {+1}${pause})+reload(${self_q} __render)"
+    local bind_reload="ctrl-r:reload(${self_q} __render)"
+    local bind_filter_toggle="ctrl-a:execute-silent(${self_q} __toggle-filter)+reload(${self_q} __render)+transform-prompt(${self_q} __prompt)"
+    local bind_open="ctrl-o:execute-silent(${self_q} __open {8})"
+    local bind_scope_cycle="ctrl-s:execute-silent(${self_q} __cycle-scope)+reload(${self_q} __render)+transform-prompt(${self_q} __prompt)"
 
-	vise::render | fzf \
-		--delimiter=$'\t' \
-		--with-nth=3..6 \
-		--tiebreak=index \
-		--multi \
-		--ansi \
-		--height=100% \
-		--preview="${self_q} __preview {1} {2} {3} {4} {5} {6} {7} {8} {9} {10}" \
-		--preview-window="${VISE_PREVIEW_POS:-down},45%,border-top" \
-		--footer='ctrl-g:use-global  ctrl-t:use-project  ctrl-x:remove  ctrl-u:upgrade  ctrl-s:scope(all/global/project)  ctrl-a:toggle(tooling/all)  ctrl-o:open-url  ctrl-r:reload' \
-		--footer-border=line \
-		--prompt="$(vise::prompt)" \
-		--bind="$bind_global" \
-		--bind="$bind_project" \
-		--bind="$bind_remove" \
-		--bind="$bind_upgrade" \
-		--bind="$bind_reload" \
-		--bind="$bind_filter_toggle" \
-		--bind="$bind_scope_cycle" \
-		--bind="$bind_open"
+    vise::render | fzf \
+        --delimiter=$'\t' \
+        --with-nth=3..6 \
+        --tiebreak=index \
+        --multi \
+        --ansi \
+        --height=100% \
+        --preview="${self_q} __preview {1} {2} {3} {4} {5} {6} {7} {8} {9} {10}" \
+        --preview-window="${VISE_PREVIEW_POS:-down},45%,border-top" \
+        --footer='ctrl-g:use-global  ctrl-t:use-project  ctrl-x:remove  ctrl-u:upgrade  ctrl-s:scope(all/global/project)  ctrl-a:toggle(tooling/all)  ctrl-o:open-url  ctrl-r:reload' \
+        --footer-border=line \
+        --prompt="$(vise::prompt)" \
+        --bind="$bind_global" \
+        --bind="$bind_project" \
+        --bind="$bind_remove" \
+        --bind="$bind_upgrade" \
+        --bind="$bind_reload" \
+        --bind="$bind_filter_toggle" \
+        --bind="$bind_scope_cycle" \
+        --bind="$bind_open"
 }
 
 # Global flags are accepted before or after the command. Parsing stops dead at
@@ -738,92 +738,92 @@ vise::tui() {
 CMD=""
 ARGS=()
 while (($#)); do
-	case "$1" in
-	-v | --v | --verbose)
-		VISE_VERBOSE=1
-		shift
-		;;
-	-vv | --debug)
-		VISE_VERBOSE=1
-		VISE_DEBUG=1
-		shift
-		;;
-	-h | --help | help)
-		CMD="help"
-		shift
-		;;
-	-l | --list)
-		[[ -n "$CMD" ]] || CMD="list"
-		shift
-		;;
-	-s | --sync)
-		[[ -n "$CMD" ]] || CMD="sync"
-		shift
-		;;
-	__*)
-		CMD="$1"
-		shift
-		ARGS=("$@")
-		break
-		;;
-	*)
-		if [[ -z "$CMD" ]]; then CMD="$1"; else ARGS+=("$1"); fi
-		shift
-		;;
-	esac
+    case "$1" in
+    -v | --v | --verbose)
+        VISE_VERBOSE=1
+        shift
+        ;;
+    -vv | --debug)
+        VISE_VERBOSE=1
+        VISE_DEBUG=1
+        shift
+        ;;
+    -h | --help | help)
+        CMD="help"
+        shift
+        ;;
+    -l | --list)
+        [[ -n "$CMD" ]] || CMD="list"
+        shift
+        ;;
+    -s | --sync)
+        [[ -n "$CMD" ]] || CMD="sync"
+        shift
+        ;;
+    __*)
+        CMD="$1"
+        shift
+        ARGS=("$@")
+        break
+        ;;
+    *)
+        if [[ -z "$CMD" ]]; then CMD="$1"; else ARGS+=("$1"); fi
+        shift
+        ;;
+    esac
 done
 export VISE_VERBOSE VISE_DEBUG
 
 case "$CMD" in
 "")
-	vise::tui
-	;;
+    vise::tui
+    ;;
 list)
-	vise::list
-	;;
+    vise::list
+    ;;
 sync)
-	vise::sync "${ARGS[0]:-}"
-	;;
+    vise::sync "${ARGS[0]:-}"
+    ;;
 help)
-	vise::usage
-	;;
+    vise::usage
+    ;;
 __render)
-	vise::render "${ARGS[0]:-}" "${ARGS[1]:-}"
-	;;
+    vise::render "${ARGS[0]:-}" "${ARGS[1]:-}"
+    ;;
 # ${ARGS[@]+"${ARGS[@]}"} rather than bare "${ARGS[@]}": bash below 4.4
 # expands "${ARR[@]}" on a zero-length array as an unset variable under
 # `set -u`, aborting under macOS's system /bin/bash (3.2). The `+` form
 # short-circuits the expansion entirely when ARGS is empty.
 __preview)
-	vise::preview ${ARGS[@]+"${ARGS[@]}"}
-	;;
+    vise::preview ${ARGS[@]+"${ARGS[@]}"}
+    ;;
 __open)
-	vise::open_url "${ARGS[0]:-}"
-	;;
+    vise::open_url "${ARGS[0]:-}"
+    ;;
 __toggle-filter)
-	vise::toggle_filter
-	;;
+    vise::toggle_filter
+    ;;
 __cycle-scope)
-	vise::cycle_scope
-	;;
+    vise::cycle_scope
+    ;;
 __prompt)
-	vise::prompt
-	;;
+    vise::prompt
+    ;;
 __use-global)
-	vise::use_global ${ARGS[@]+"${ARGS[@]}"}
-	;;
+    vise::use_global ${ARGS[@]+"${ARGS[@]}"}
+    ;;
 __use-project)
-	vise::use_project ${ARGS[@]+"${ARGS[@]}"}
-	;;
+    vise::use_project ${ARGS[@]+"${ARGS[@]}"}
+    ;;
 __upgrade)
-	vise::upgrade ${ARGS[@]+"${ARGS[@]}"}
-	;;
+    vise::upgrade ${ARGS[@]+"${ARGS[@]}"}
+    ;;
 __rm)
-	vise::rm ${ARGS[@]+"${ARGS[@]}"}
-	;;
+    vise::rm ${ARGS[@]+"${ARGS[@]}"}
+    ;;
 *)
-	printf 'vise: unknown command: %s\n\n' "$CMD" >&2
-	vise::usage >&2
-	exit 1
-	;;
+    printf 'vise: unknown command: %s\n\n' "$CMD" >&2
+    vise::usage >&2
+    exit 1
+    ;;
 esac
