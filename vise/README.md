@@ -94,6 +94,13 @@ update path.
 - `VISE_PREVIEW_POS=up` — move the detail pane above the list, which puts the
   key guide on the literal bottom row. Default is `down`.
 
+Test seams, not user-facing config — a fixture file stands in for the
+matching `mise ... --json` call, used by `vise.smoke.sh`:
+
+- `VISE_CONFIG_JSON=<path>` — replaces `mise config ls --json`.
+- `VISE_LS_JSON=<path>` — replaces `mise ls --json`.
+- `VISE_REGISTRY_JSON=<path>` — replaces `mise registry --json`.
+
 ## Install
 
 Relative symlink in `bin/` (committed), on `PATH` via the toolbox's one line:
