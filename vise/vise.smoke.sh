@@ -167,6 +167,24 @@ else
     bad "non-empty upgrade still dry-runs" "$out"
 fi
 
+# --- mixed availability in a multi-select: one bad row must not cancel -------
+# the rest. --help promises "every action applies to the whole selection";
+# tab-selecting an unavailable: row (24 exist in the catalog) alongside good
+# ones must not silently withhold the good ones too.
+for pair in "__use-global:mise use -g" "__use-project:mise use" "__upgrade:mise upgrade"; do
+    action="${pair%%:*}"
+    mise_cmd="${pair#*:}"
+    out=$(VISE_DRY_RUN=1 bash "$VISE" "$action" good-tool unavailable:some-tool 2>&1)
+    rc=$?
+    if [ "$rc" -ne 0 ] &&
+        printf '%s\n' "$out" | grep -qx "DRY: $mise_cmd good-tool" &&
+        printf '%s\n' "$out" | grep -q 'some-tool has no mise backend'; then
+        ok "$action: valid coordinate installs despite an unavailable row in the selection"
+    else
+        bad "$action: valid coordinate installs despite an unavailable row in the selection" "rc=$rc out=[$out]"
+    fi
+done
+
 # --- bash 3.2 compatibility ---------------------------------------------------
 # macOS ships /bin/bash 3.2.57. Bash below 4.4 treats "${ARR[@]}" on a
 # zero-length array as an unset variable under `set -u`, aborting the script
