@@ -193,5 +193,111 @@ else
 	printf '  \033[33mskip\033[0m bash 3.2 compatibility (/bin/bash is %s, not pre-4.4)\n' "$sys_ver"
 fi
 
+# --- default filter: hides uncatalogued rows, keeps real editor tooling -----
+# vise's row set unions the catalog with everything mise manages (see
+# vise::render's $observed); anything absent from the catalog reports kind
+# "?". The picker exists to browse LSPs/linters/formatters, not the runtimes
+# and package managers mise also happens to run, so uncatalogued rows must be
+# hidden by default. VISE_FILTER=all (ctrl-a) is the escape hatch back to
+# everything.
+#
+# A synthetic single-row catalog stands in for the real one: against the real
+# ~500-row catalog almost nothing observed lands as "?", so the exact case
+# under test — uncatalogued rows leaking into the default view — would go
+# unexercised. cargo:rnix-lsp (kind lsp, language nix) is a real catalog.tsv
+# row picked for the same reason as the alejandra fixture above: Nix tooling
+# is absent from machines that run this suite, so nothing here installs or
+# configures it by coincidence.
+FILTER_CATALOG="$(mktemp -d "$BASE/filter-catalog.XXXXXX")/catalog.tsv"
+cat >"$FILTER_CATALOG" <<'EOF'
+cargo:rnix-lsp	rnix-lsp	lsp	nix
+EOF
+if mise ls --json 2>/dev/null | jq -e 'has("cargo:rnix-lsp")' >/dev/null 2>&1; then
+	printf 'fixture cargo:rnix-lsp is installed locally, pick another\n' >&2
+	exit 2
+fi
+
+# kind lives in column 4, right-padded to KIND_W with spaces (vise::render's
+# pad()); trim the padding before comparing.
+kind_field() { awk -F'\t' '{ k = $4; sub(/[ \t]+$/, "", k); print k }'; }
+
+default_out="$(cd "$REPO_ROOT" && VISE_CATALOG="$FILTER_CATALOG" bash "$VISE" list 2>&1)"
+
+unclassified=$(printf '%s\n' "$default_out" | kind_field | grep -cx '?') || unclassified=0
+if [ "$unclassified" = "0" ]; then
+	ok "default filter: no uncatalogued (?) rows"
+else
+	bad "default filter: no uncatalogued (?) rows" "$unclassified row(s)"
+fi
+
+# Control for the assertion above: a bug that hides EVERYTHING (not just "?"
+# rows) would pass it too. The fixture's own catalogued tool must survive.
+if printf '%s\n' "$default_out" | awk -F'\t' '$1 == "cargo:rnix-lsp"' | grep -q .; then
+	ok "default filter: still shows real tooling (rnix-lsp)"
+else
+	bad "default filter: still shows real tooling (rnix-lsp)" "$default_out"
+fi
+
+# VISE_FILTER=all needs at least one observed tool outside the fixture catalog
+# to prove anything widened. This repo's own mise.toml (shfmt, shellcheck,
+# lefthook) guarantees that when run from REPO_ROOT, but check rather than
+# assume — skip instead of failing if the precondition doesn't hold.
+if {
+	mise config ls --json 2>/dev/null | jq -r '.[].tools[]?'
+	mise ls --json 2>/dev/null | jq -r 'keys[]?'
+} |
+	grep -vxF 'cargo:rnix-lsp' | grep -q .; then
+	all_out="$(cd "$REPO_ROOT" && VISE_FILTER=all VISE_CATALOG="$FILTER_CATALOG" bash "$VISE" list 2>&1)"
+	default_n=$(printf '%s\n' "$default_out" | grep -c .) || default_n=0
+	all_n=$(printf '%s\n' "$all_out" | grep -c .) || all_n=0
+	all_unclassified=$(printf '%s\n' "$all_out" | kind_field | grep -cx '?') || all_unclassified=0
+	if [ "$all_n" -gt "$default_n" ] && [ "$all_unclassified" -gt "0" ]; then
+		ok "VISE_FILTER=all widens: more rows, includes uncatalogued (?)"
+	else
+		bad "VISE_FILTER=all widens: more rows, includes uncatalogued (?)" \
+			"default=$default_n all=$all_n unclassified=$all_unclassified"
+	fi
+else
+	printf '  \033[33mskip\033[0m VISE_FILTER=all widens (no uncatalogued mise tool observed here)\n'
+fi
+
+# VISE_FILTER=tooling explicit must match the new default byte-for-byte: the
+# flip changes which mode starts active, never what "tooling" mode does.
+tooling_out="$(cd "$REPO_ROOT" && VISE_FILTER=tooling VISE_CATALOG="$FILTER_CATALOG" bash "$VISE" list 2>&1)"
+if [ "$tooling_out" = "$default_out" ]; then
+	ok "VISE_FILTER=tooling explicit matches the default"
+else
+	bad "VISE_FILTER=tooling explicit matches the default" \
+		"$(diff <(printf '%s\n' "$default_out") <(printf '%s\n' "$tooling_out") | head -5)"
+fi
+
+# --- default filter: the interactive picker seeds the same default ----------
+# `list` never touches vise::tui — it calls vise::render directly, so every
+# assertion above exercises only vise::filter_mode's fallback, not the
+# separate "${VISE_FILTER:-tooling}" seed vise::tui writes to VISE_STATE
+# before fzf ever starts. The two must agree (see the comment at that seed);
+# a stub fzf stands in for the real one so this can assert the seeded value
+# without a TTY or a real picker session.
+STUB_BIN="$(mktemp -d "$BASE/stubbin.XXXXXX")"
+cat >"$STUB_BIN/fzf" <<'EOF'
+#!/bin/sh
+# Drains the rendered rows like a real fzf would, reports vise::tui's initial
+# VISE_STATE content to a side file, then quits with no selection.
+cat >/dev/null
+[ -n "${VISE_STATE:-}" ] && cat "$VISE_STATE" >"$FZF_STUB_OUT" 2>/dev/null
+exit 130
+EOF
+chmod +x "$STUB_BIN/fzf"
+
+TUI_STATE_OUT="$(mktemp "$BASE/tui-state.XXXXXX")"
+(cd "$REPO_ROOT" && PATH="$STUB_BIN:$PATH" FZF_STUB_OUT="$TUI_STATE_OUT" \
+	VISE_CATALOG="$FILTER_CATALOG" bash "$VISE" >/dev/null 2>&1)
+seeded="$(cat "$TUI_STATE_OUT" 2>/dev/null)"
+if [ "$seeded" = "tooling" ]; then
+	ok "vise::tui seeds VISE_STATE to tooling by default"
+else
+	bad "vise::tui seeds VISE_STATE to tooling by default" "[$seeded]"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
