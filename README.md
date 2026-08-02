@@ -14,6 +14,7 @@ bin/            # on PATH — relative symlinks to entrypoints only
 ## Tools
 
 - **sancla** — launch Claude Code with secret-looking env vars stripped.
+- **vise** — Mason-like fzf picker over mise-managed LSPs, linters and formatters.
 
 ## Install
 
