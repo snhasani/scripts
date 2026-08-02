@@ -299,5 +299,73 @@ else
     bad "vise::tui seeds VISE_STATE to tooling by default" "[$seeded]"
 fi
 
+# --- atomic catalog writes (vise::write_atomic via __write-atomic) ----------
+# vise::sync's final block used to redirect straight into the live catalog
+# (`{ ... } >"$out"`): the shell truncates $out the moment that redirect is
+# set up, before any of the block's commands run, so a mid-pipeline failure
+# (malformed override, sort killed, disk full, Ctrl-C) destroyed the
+# committed catalog and left only whatever had been printed so far — with no
+# "sync failed" message, since the abort happened after truncation. A pipe's
+# reading side can't tell a producer that finished from one that wrote a few
+# lines and died (EOF looks identical either way), so vise::write_atomic runs
+# the producer itself, checked via a plain redirect, and only renames its
+# temp file over dest when that redirect's own exit status says it may.
+WA_DIR="$(mktemp -d "$BASE/write-atomic.XXXXXX")"
+
+# 1. success: seeded dest gets fully replaced by the producer's output.
+wa_dest="$WA_DIR/success.tsv"
+printf 'old content\n' >"$wa_dest"
+bash "$VISE" __write-atomic "$wa_dest" printf 'new content\n' >/dev/null 2>&1
+got="$(cat "$wa_dest")"
+if [ "$got" = "new content" ]; then
+    ok "write_atomic: success path replaces dest with the producer's output"
+else
+    bad "write_atomic: success path replaces dest with the producer's output" "$got"
+fi
+
+# 2. failure: THE point of this slice — a producer that emits a few lines
+# then dies must not touch dest at all. This is the assertion that would
+# have caught the original bug.
+wa_dest2="$WA_DIR/failure.tsv"
+printf 'original catalog content\n' >"$wa_dest2"
+bash "$VISE" __write-atomic "$wa_dest2" bash -c 'printf "a\nb\n"; exit 1' >/dev/null 2>&1
+rc=$?
+got2="$(cat "$wa_dest2")"
+if [ "$rc" -ne 0 ] && [ "$got2" = "original catalog content" ]; then
+    ok "write_atomic: failing producer leaves dest byte-identical and reports failure"
+else
+    bad "write_atomic: failing producer leaves dest byte-identical and reports failure" "rc=$rc got=[$got2]"
+fi
+
+# 3. no litter: nothing from the failed attempt above may remain beside dest.
+litter="$(find "$WA_DIR" -maxdepth 1 -name '.vise-*' 2>/dev/null)"
+if [ -z "$litter" ]; then
+    ok "write_atomic: no leftover temp file after a failed write"
+else
+    bad "write_atomic: no leftover temp file after a failed write" "$litter"
+fi
+
+# 4. mode preserved: a rename must not silently loosen or tighten permissions.
+wa_dest3="$WA_DIR/mode.tsv"
+printf 'content\n' >"$wa_dest3"
+chmod 0640 "$wa_dest3"
+bash "$VISE" __write-atomic "$wa_dest3" printf 'new content\n' >/dev/null 2>&1
+mode_after=$(stat -f '%Lp' "$wa_dest3" 2>/dev/null || stat -c '%a' "$wa_dest3" 2>/dev/null)
+if [ "$mode_after" = "640" ]; then
+    ok "write_atomic: preserves the destination's existing mode"
+else
+    bad "write_atomic: preserves the destination's existing mode" "$mode_after"
+fi
+
+# 5. new file: sync's first run on a fresh checkout has no catalog.tsv yet.
+wa_dest4="$WA_DIR/new.tsv"
+bash "$VISE" __write-atomic "$wa_dest4" printf 'first content\n' >/dev/null 2>&1
+got4="$([ -f "$wa_dest4" ] && cat "$wa_dest4")"
+if [ "$got4" = "first content" ]; then
+    ok "write_atomic: creates dest when it doesn't exist yet"
+else
+    bad "write_atomic: creates dest when it doesn't exist yet" "$got4"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
