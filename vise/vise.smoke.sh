@@ -514,5 +514,190 @@ else
     bad "VISE_LS_JSON + VISE_REGISTRY_JSON stand in for mise ls/registry --json (no real mise on PATH)" "rc=$rc out=[$out]"
 fi
 
+# --- coordinate identity join: 3 spellings collapse to ONE row --------------
+# aqua:tamasfe/taplo (the catalog's own coordinate), github:tamasfe/taplo, and
+# the bare shorthand taplo are one tool under three different backends. The
+# bug this join exists to prevent: install it under ANY ONE of these
+# spellings and, without the join, it would show as TWO rows instead of
+# one — a phantom "not installed" ghost of the catalog's own coordinate, plus
+# an "uncatalogued" (kind "?") row for whatever you actually typed. Each
+# spelling is tested independently, one real install at a time: a single tool
+# never arrives through all three backends simultaneously.
+ORIG_PATH="$PATH"
+JOIN_DIR="$(mktemp -d "$BASE/join.XXXXXX")"
+JOIN_GLOBAL_CFG="$JOIN_DIR/global.toml"
+JOIN_CATALOG="$JOIN_DIR/catalog.tsv"
+cat >"$JOIN_CATALOG" <<'EOF'
+aqua:tamasfe/taplo	taplo	lsp,formatter	toml
+EOF
+cat >"$JOIN_DIR/registry.json" <<'EOF'
+[{"short": "taplo", "backends": ["aqua:tamasfe/taplo", "cargo:taplo-cli"], "description": "A TOML toolkit"}]
+EOF
+
+for spelling in "aqua:tamasfe/taplo" "github:tamasfe/taplo" "taplo"; do
+    cat >"$JOIN_DIR/config.json" <<EOF
+[{"path": "$JOIN_GLOBAL_CFG", "tools": ["$spelling"]}]
+EOF
+    cat >"$JOIN_DIR/ls.json" <<EOF
+{"$spelling": [{"version": "0.10.0", "active": true}]}
+EOF
+    out=$(cd "$REPO_ROOT" && VISE_CATALOG="$JOIN_CATALOG" VISE_CONFIG_JSON="$JOIN_DIR/config.json" \
+        VISE_LS_JSON="$JOIN_DIR/ls.json" VISE_REGISTRY_JSON="$JOIN_DIR/registry.json" \
+        MISE_GLOBAL_CONFIG_FILE="$JOIN_GLOBAL_CFG" bash "$VISE" list 2>&1)
+    rows=$(printf '%s\n' "$out" | grep -c .)
+    row=$(printf '%s\n' "$out" | awk -F'\t' -v c="$spelling" '$1 == c')
+    if [ "$rows" = "1" ] && [ -n "$row" ] && printf '%s\n' "$row" | grep -q 'taplo'; then
+        ok "join: $spelling collapses to one row carrying the catalog's name/kind"
+    else
+        bad "join: $spelling collapses to one row carrying the catalog's name/kind" "rows=$rows out=[$out]"
+    fi
+done
+
+# --- coordinate identity join: non-collapse across ecosystems ---------------
+# Counterfactual to the test above: without it, a join that over-eagerly
+# folds ecosystems together would pass the taplo assertions too. pipx:pyrefly
+# and github:facebook/pyrefly are different identities (see vise/README.md,
+# "How the join works") and must stay two separate rows even though one of
+# them is installed.
+NC_DIR="$(mktemp -d "$BASE/noncollapse.XXXXXX")"
+NC_GLOBAL_CFG="$NC_DIR/global.toml"
+NC_CATALOG="$NC_DIR/catalog.tsv"
+cat >"$NC_CATALOG" <<'EOF'
+github:facebook/pyrefly	pyrefly	lsp,linter	python
+pipx:pyrefly	pyrefly-pipx	linter	python
+EOF
+cat >"$NC_DIR/config.json" <<EOF
+[{"path": "$NC_GLOBAL_CFG", "tools": ["github:facebook/pyrefly"]}]
+EOF
+cat >"$NC_DIR/ls.json" <<'EOF'
+{"github:facebook/pyrefly": [{"version": "1.1.1", "active": true}]}
+EOF
+echo '[]' >"$NC_DIR/registry.json"
+nc_out=$(cd "$REPO_ROOT" && VISE_CATALOG="$NC_CATALOG" VISE_CONFIG_JSON="$NC_DIR/config.json" \
+    VISE_LS_JSON="$NC_DIR/ls.json" VISE_REGISTRY_JSON="$NC_DIR/registry.json" \
+    MISE_GLOBAL_CONFIG_FILE="$NC_GLOBAL_CFG" bash "$VISE" list 2>&1)
+nc_rows=$(printf '%s\n' "$nc_out" | grep -c .)
+gh_row=$(printf '%s\n' "$nc_out" | awk -F'\t' '$1 == "github:facebook/pyrefly"')
+pipx_row=$(printf '%s\n' "$nc_out" | awk -F'\t' '$1 == "pipx:pyrefly"')
+if [ "$nc_rows" = "2" ] && printf '%s\n' "$gh_row" | grep -qv 'pyrefly-pipx' &&
+    printf '%s\n' "$gh_row" | grep -q 'pyrefly' && printf '%s\n' "$pipx_row" | grep -q 'pyrefly-pipx'; then
+    ok "join: pipx:pyrefly and github:facebook/pyrefly stay separate rows (no cross-ecosystem collapse)"
+else
+    bad "join: pipx:pyrefly and github:facebook/pyrefly stay separate rows (no cross-ecosystem collapse)" \
+        "rows=$nc_rows gh=[$gh_row] pipx=[$pipx_row]"
+fi
+
+# --- coordinate identity join: scope glyphs are config-derived --------------
+# Scope (global/project/both/none, and the unavailable ✗ override) must come
+# purely from which config file(s) list a coordinate — never from whether
+# mise happens to have it installed. Two rows below make that split visible:
+# orphan-tool is in `mise ls` but in no config file (○, yet still reports its
+# real version), and ghost-tool is the reverse — declared in project config
+# but never actually installed (◐, version "-"). A scope computed from
+# install state instead of config would get both of these backwards.
+SCOPE_DIR="$(mktemp -d "$BASE/scope.XXXXXX")"
+SCOPE_GLOBAL_CFG="$SCOPE_DIR/global.toml"
+SCOPE_CATALOG="$SCOPE_DIR/catalog.tsv"
+cat >"$SCOPE_CATALOG" <<'EOF'
+npm:yaml-language-server	yaml-language-server	lsp	yaml
+pipx:clang-tidy	clang-tidy	linter	c,cpp
+github:koalaman/shellcheck	shellcheck	linter	bash
+github:golangci/golangci-lint	golangci-lint	linter	go
+unavailable:jdtls-classic	jdtls-classic	lsp	java
+cargo:ghost-tool	ghost-tool	linter	rust
+pipx:orphan-tool	orphan-tool	formatter	misc
+EOF
+cat >"$SCOPE_DIR/config.json" <<EOF
+[
+  {"path": "$SCOPE_GLOBAL_CFG", "tools": ["npm:yaml-language-server", "github:koalaman/shellcheck"]},
+  {"path": "$SCOPE_DIR/project.toml", "tools": ["pipx:clang-tidy", "github:koalaman/shellcheck", "cargo:ghost-tool"]}
+]
+EOF
+cat >"$SCOPE_DIR/ls.json" <<'EOF'
+{
+  "npm:yaml-language-server": [{"version": "1.24.0", "active": true}],
+  "pipx:clang-tidy": [{"version": "22.1.8", "active": true}],
+  "github:koalaman/shellcheck": [{"version": "0.11.0", "active": true}],
+  "pipx:orphan-tool": [{"version": "3.3.3", "active": true}]
+}
+EOF
+echo '[]' >"$SCOPE_DIR/registry.json"
+
+# field 2 is the plain-ASCII scopecode; field 3 is "<glyph> <name>" padded —
+# splitting on whitespace lifts just the glyph without slicing the UTF-8
+# character, which byte-based substr()/cut would risk.
+scope_of_row() { printf '%s\n' "$1" | awk -F'\t' -v c="$2" '$1 == c { print $2 }'; }
+glyph_of_row() { printf '%s\n' "$1" | awk -F'\t' -v c="$2" '$1 == c { print $3 }' | awk '{ print $1 }'; }
+version_of_row() { printf '%s\n' "$1" | awk -F'\t' -v c="$2" '$1 == c { v = $6; sub(/[ \t]+$/, "", v); print v }'; }
+
+run_scope() {
+    PATH="$1" VISE_CATALOG="$SCOPE_CATALOG" VISE_CONFIG_JSON="$SCOPE_DIR/config.json" \
+        VISE_LS_JSON="$SCOPE_DIR/ls.json" VISE_REGISTRY_JSON="$SCOPE_DIR/registry.json" \
+        MISE_GLOBAL_CONFIG_FILE="$SCOPE_GLOBAL_CFG" bash "$VISE" list 2>&1
+}
+scope_out="$(cd "$REPO_ROOT" && run_scope "$ORIG_PATH")"
+
+check_scope() {
+    local coord="$1" want_scope="$2" want_glyph="$3" label="$4"
+    local got_scope got_glyph
+    got_scope=$(scope_of_row "$scope_out" "$coord")
+    got_glyph=$(glyph_of_row "$scope_out" "$coord")
+    if [ "$got_scope" = "$want_scope" ] && [ "$got_glyph" = "$want_glyph" ]; then
+        ok "$label"
+    else
+        bad "$label" "scope=$got_scope glyph=$got_glyph"
+    fi
+}
+check_scope "npm:yaml-language-server" "global" "●" "scope glyph: installed globally shows ●"
+check_scope "pipx:clang-tidy" "project" "◐" "scope glyph: installed in this project shows ◐"
+check_scope "github:koalaman/shellcheck" "both" "◍" "scope glyph: installed in both configs shows ◍"
+check_scope "github:golangci/golangci-lint" "none" "○" "scope glyph: absent from config and mise ls shows ○"
+check_scope "unavailable:jdtls-classic" "none" "✗" "scope glyph: unavailable coordinate shows ✗ regardless of scope"
+
+got_v=$(version_of_row "$scope_out" "pipx:orphan-tool")
+if [ "$got_v" = "3.3.3" ]; then
+    ok "scope is config-derived: absent-from-config tool (○) still reports its real mise-ls version"
+else
+    bad "scope is config-derived: absent-from-config tool (○) still reports its real mise-ls version" "$got_v"
+fi
+
+got_v=$(version_of_row "$scope_out" "cargo:ghost-tool")
+if [ "$got_v" = "-" ]; then
+    ok "scope is config-derived: declared-but-not-installed tool (◐) reports no version"
+else
+    bad "scope is config-derived: declared-but-not-installed tool (◐) reports no version" "$got_v"
+fi
+
+# --- determinism + hermeticity: same fixtures, twice, with mise unreachable -
+# Re-runs the scope fixture above verbatim. run2 (same PATH) proves the join
+# is a pure function of its inputs; run3 (mise stripped from PATH entirely)
+# proves it never fell through to a real mise call for any of the three
+# seams — if it had, run3 would hard-fail with "command not found" instead of
+# reproducing run1 byte-for-byte.
+scope_out2="$(cd "$REPO_ROOT" && run_scope "$ORIG_PATH")"
+if [ "$scope_out2" = "$scope_out" ]; then
+    ok "determinism: identical fixtures produce byte-identical output"
+else
+    bad "determinism: identical fixtures produce byte-identical output" \
+        "$(diff <(printf '%s\n' "$scope_out") <(printf '%s\n' "$scope_out2") | head -5)"
+fi
+
+scope_out3="$(cd "$REPO_ROOT" && run_scope "$NO_MISE_PATH")"
+rc3=$?
+if [ "$rc3" -eq 0 ] && [ "$scope_out3" = "$scope_out" ]; then
+    ok "hermeticity: same output with mise unreachable on PATH (all three seams cover every mise call render makes)"
+else
+    bad "hermeticity: same output with mise unreachable on PATH (all three seams cover every mise call render makes)" \
+        "rc=$rc3 out=[$scope_out3]"
+fi
+
+# vise::preview is explicitly OUT OF SCOPE for the seams/join tests above.
+# It calls `mise ls "$coord" 2>/dev/null || true` directly and unseamed — and
+# that `|| true` swallows a missing-mise "command not found" (127) the exact
+# same way it swallows a genuine "not installed" empty result, so a
+# PATH-stripped __preview run would misreport (not installed) as if it were a
+# real, verified result. Do not assume the PATH-stripping trick above proves
+# __preview is hermetic too — it isn't, and it doesn't.
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
