@@ -98,7 +98,7 @@ KEYS (in the picker)
   ctrl-x   remove (each tool from its own scope)
   ctrl-u   upgrade
   ctrl-s   cycle scope: all -> global -> project
-  ctrl-a   toggle tooling-only (hide runtimes and uncatalogued tools)
+  ctrl-a   toggle tooling-only / all (starts tooling-only)
   ctrl-o   open the tool's homepage in a browser
   ctrl-r   reload
   tab      multi-select; every action applies to the whole selection
@@ -111,7 +111,7 @@ GLYPHS
 ENVIRONMENT
   VISE_CATALOG=PATH    read a specific catalog file
   VISE_OVERRIDES=PATH  read a specific overrides file during sync
-  VISE_FILTER=tooling  start with the tooling-only filter on
+  VISE_FILTER=all      widen to every mise-managed tool (default: tooling-only)
   VISE_SCOPE=global    start in a scope view (all|global|project)
   VISE_PREVIEW_POS=up  put the detail pane above the list
   VISE_DRY_RUN=1       print mise commands instead of running them
@@ -265,13 +265,17 @@ vise::cycle_scope() {
 
 # Explicit arg wins, then the on-disk toggle state, then the env default. The
 # prompt and the renderer both resolve through here so they cannot disagree
-# about which mode is active.
+# about which mode is active. Default is tooling-only: the picker exists to
+# browse LSPs/linters/formatters, not the runtimes and package managers that
+# also ride along in $observed (vise::render unions the catalog with
+# everything mise manages) — ctrl-a widens to "all" when one of those needs
+# managing here too.
 vise::filter_mode() {
 	local mode="${1:-}"
 	if [[ -z "$mode" && -n "${VISE_STATE:-}" && -r "${VISE_STATE:-}" ]]; then
 		mode=$(<"$VISE_STATE")
 	fi
-	printf '%s\n' "${mode:-${VISE_FILTER:-all}}"
+	printf '%s\n' "${mode:-${VISE_FILTER:-tooling}}"
 }
 
 vise::scope_mode() {
@@ -690,7 +694,9 @@ vise::tui() {
 	fi
 	VISE_STATE="$state_dir/filter"
 	export VISE_STATE
-	echo "${VISE_FILTER:-all}" >"$VISE_STATE"
+	# Must agree with vise::filter_mode's own fallback, or the prompt and the
+	# renderer would start disagreeing about which mode is active.
+	echo "${VISE_FILTER:-tooling}" >"$VISE_STATE"
 	VISE_SCOPE_STATE="$state_dir/scope"
 	export VISE_SCOPE_STATE
 	echo "${VISE_SCOPE:-all}" >"$VISE_SCOPE_STATE"
@@ -713,7 +719,7 @@ vise::tui() {
 		--height=100% \
 		--preview="${self_q} __preview {1} {2} {3} {4} {5} {6} {7} {8} {9} {10}" \
 		--preview-window="${VISE_PREVIEW_POS:-down},45%,border-top" \
-		--footer='ctrl-g:use-global  ctrl-t:use-project  ctrl-x:remove  ctrl-u:upgrade  ctrl-s:scope(all/global/project)  ctrl-a:tooling-filter  ctrl-o:open-url  ctrl-r:reload' \
+		--footer='ctrl-g:use-global  ctrl-t:use-project  ctrl-x:remove  ctrl-u:upgrade  ctrl-s:scope(all/global/project)  ctrl-a:toggle(tooling/all)  ctrl-o:open-url  ctrl-r:reload' \
 		--footer-border=line \
 		--prompt="$(vise::prompt)" \
 		--bind="$bind_global" \

@@ -34,7 +34,7 @@ vise -h | --help     # full reference
 | `ctrl-u` | upgrade |
 | `ctrl-o` | open the tool's homepage in a browser |
 | `ctrl-s` | cycle scope: all → global → project → all |
-| `ctrl-a` | toggle tooling-only / everything |
+| `ctrl-a` | toggle tooling-only / everything (starts tooling-only) |
 | `ctrl-r` | reload |
 
 `ctrl-s` and `ctrl-a` are independent — they compose.
@@ -82,7 +82,9 @@ update path.
 ## Env
 
 - `VISE_DRY_RUN=1` — print mise commands instead of running them.
-- `VISE_FILTER=tooling` — hide uncatalogued rows in `list`.
+- `VISE_FILTER=all` — widen `list`/the picker to every mise-managed tool.
+  Default is `tooling`, which hides rows absent from the catalog (runtimes,
+  package managers, anything not an LSP/linter/formatter).
 - `VISE_SCOPE=global|project` — start in that scope view.
 - `VISE_CATALOG=<path>` — use a different catalog.
 - `VISE_OVERRIDES=<path>` — use a different overrides file during sync.
