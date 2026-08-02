@@ -1,7 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+# bin/vise -> ../vise/vise is the repo's install shape; an unresolved link
+# leaves dirname pointing at bin/, so catalog lookup below silently falls
+# through to "no catalog" instead of finding it next to the real script.
+# readlink -f is GNU-only, hence this loop; a relative target resolves
+# against the link's OWN directory, not the caller's cwd.
+vise::resolve_self() {
+	local p="$1" target dir max=40
+	while [[ -L "$p" ]]; do
+		((max--)) || {
+			printf 'vise: symlink loop resolving %s\n' "$1" >&2
+			exit 1
+		}
+		target="$(readlink "$p")"
+		case "$target" in
+		/*) p="$target" ;;
+		*)
+			dir="$(cd "$(dirname "$p")" && pwd)"
+			p="$dir/$target"
+			;;
+		esac
+	done
+	printf '%s/%s' "$(cd "$(dirname "$p")" && pwd)" "$(basename "$p")"
+}
+SELF="$(vise::resolve_self "${BASH_SOURCE[0]}")"
 export SELF
 
 # catalog.tsv is the generated catalog (the upstream list with
