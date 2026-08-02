@@ -136,15 +136,27 @@ vise::mutate() {
 }
 
 # Rows marked unavailable are listed for parity with the upstream registry but
-# ship through an ecosystem mise has no backend for. Fail with the reason
-# rather than handing mise a coordinate it cannot parse.
-vise::reject_unavailable() {
+# ship through an ecosystem mise has no backend for. Reports the reason and
+# drops each one individually into $VISE_VALID rather than the caller's whole
+# batch: a tab multi-select's one bad row must not withhold the coordinates
+# that were fine (--help: "every action applies to the whole selection").
+# Returns 1 if anything was rejected, so the caller's exit code still says
+# something was skipped.
+#
+# Writes to a global instead of returning the list via stdout/mapfile so this
+# stays usable under bash 3.2 (mapfile and namerefs are both bash 4+, and this
+# script's dispatch layer is explicitly kept 3.2-safe).
+VISE_VALID=()
+vise::partition_available() {
+    VISE_VALID=()
     local c rc=0
     for c in "$@"; do
         if [[ "$c" == unavailable:* ]]; then
             printf 'vise: %s has no mise backend (upstream ships it via composer/luarocks/opam/openvsx)\n' \
                 "${c#unavailable:}" >&2
             rc=1
+        else
+            VISE_VALID+=("$c")
         fi
     done
     return "$rc"
@@ -165,9 +177,27 @@ vise::require_selection() {
     fi
 }
 
-vise::use_global() { vise::require_selection "use-global" "$@" && vise::reject_unavailable "$@" && vise::mutate mise use -g "$@"; }
-vise::use_project() { vise::require_selection "use-project" "$@" && vise::reject_unavailable "$@" && vise::mutate mise use "$@"; }
-vise::upgrade() { vise::require_selection "upgrade" "$@" && vise::reject_unavailable "$@" && vise::mutate mise upgrade "$@"; }
+vise::use_global() {
+    vise::require_selection "use-global" "$@" || return 1
+    local rc=0
+    vise::partition_available "$@" || rc=1
+    ((${#VISE_VALID[@]} > 0)) && { vise::mutate mise use -g "${VISE_VALID[@]}" || rc=1; }
+    return "$rc"
+}
+vise::use_project() {
+    vise::require_selection "use-project" "$@" || return 1
+    local rc=0
+    vise::partition_available "$@" || rc=1
+    ((${#VISE_VALID[@]} > 0)) && { vise::mutate mise use "${VISE_VALID[@]}" || rc=1; }
+    return "$rc"
+}
+vise::upgrade() {
+    vise::require_selection "upgrade" "$@" || return 1
+    local rc=0
+    vise::partition_available "$@" || rc=1
+    ((${#VISE_VALID[@]} > 0)) && { vise::mutate mise upgrade "${VISE_VALID[@]}" || rc=1; }
+    return "$rc"
+}
 
 # Each coordinate resolves its own scope rather than trusting the caller's,
 # so a mixed-scope multi-select removes every tool from its correct config
