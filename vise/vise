@@ -150,14 +150,30 @@ vise::reject_unavailable() {
 	return "$rc"
 }
 
-vise::use_global() { vise::reject_unavailable "$@" && vise::mutate mise use -g "$@"; }
-vise::use_project() { vise::reject_unavailable "$@" && vise::mutate mise use "$@"; }
-vise::upgrade() { vise::reject_unavailable "$@" && vise::mutate mise upgrade "$@"; }
+# fzf's {+1}/{+} placeholders expand to nothing when the filter matches zero
+# rows and nothing is tab-selected — an ordinary state, not a hostile one.
+# Zero args reaching mise unchecked is not "do nothing": `mise upgrade` and
+# bare `mise use`/`mise rm` variants treat "no tool" as "every tool", and
+# that behavior differs per subcommand, so it cannot be relied on. Refuse
+# here instead.
+vise::require_selection() {
+	local action="$1"
+	shift
+	if (($# == 0)); then
+		printf 'vise: no tool selected, refusing to %s\n' "$action" >&2
+		return 1
+	fi
+}
+
+vise::use_global() { vise::require_selection "use-global" "$@" && vise::reject_unavailable "$@" && vise::mutate mise use -g "$@"; }
+vise::use_project() { vise::require_selection "use-project" "$@" && vise::reject_unavailable "$@" && vise::mutate mise use "$@"; }
+vise::upgrade() { vise::require_selection "upgrade" "$@" && vise::reject_unavailable "$@" && vise::mutate mise upgrade "$@"; }
 
 # Each coordinate resolves its own scope rather than trusting the caller's,
 # so a mixed-scope multi-select removes every tool from its correct config
 # file instead of applying one row's flag to the whole batch.
 vise::rm() {
+	vise::require_selection "rm" "$@" || return 1
 	local coord scope
 	for coord in "$@"; do
 		scope=$(vise::scope_of "$coord")
@@ -768,8 +784,12 @@ help)
 __render)
 	vise::render "${ARGS[0]:-}" "${ARGS[1]:-}"
 	;;
+# ${ARGS[@]+"${ARGS[@]}"} rather than bare "${ARGS[@]}": bash below 4.4
+# expands "${ARR[@]}" on a zero-length array as an unset variable under
+# `set -u`, aborting under macOS's system /bin/bash (3.2). The `+` form
+# short-circuits the expansion entirely when ARGS is empty.
 __preview)
-	vise::preview "${ARGS[@]}"
+	vise::preview ${ARGS[@]+"${ARGS[@]}"}
 	;;
 __open)
 	vise::open_url "${ARGS[0]:-}"
@@ -784,16 +804,16 @@ __prompt)
 	vise::prompt
 	;;
 __use-global)
-	vise::use_global "${ARGS[@]}"
+	vise::use_global ${ARGS[@]+"${ARGS[@]}"}
 	;;
 __use-project)
-	vise::use_project "${ARGS[@]}"
+	vise::use_project ${ARGS[@]+"${ARGS[@]}"}
 	;;
 __upgrade)
-	vise::upgrade "${ARGS[@]}"
+	vise::upgrade ${ARGS[@]+"${ARGS[@]}"}
 	;;
 __rm)
-	vise::rm "${ARGS[@]}"
+	vise::rm ${ARGS[@]+"${ARGS[@]}"}
 	;;
 *)
 	printf 'vise: unknown command: %s\n\n' "$CMD" >&2
