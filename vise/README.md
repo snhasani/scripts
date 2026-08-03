@@ -52,7 +52,9 @@ backend (listed for parity; install is refused with a reason)
 
 ## Files
 
-- `vise` — the script. bash + fzf + jq + mise, nothing else.
+- `vise` — the script. bash (>= 5) + fzf + jq + mise, nothing else. Refuses
+  with a clear message under an older bash instead of crashing partway
+  through (macOS ships 3.2 at `/bin/bash`; `brew install bash` gets you 5+).
 - `catalog.tsv` — **the default catalog, generated and committed** so a fresh
   clone works offline. Every LSP, linter and formatter in the Mason registry,
   with the overrides merged over the top. Do not hand-edit — rebuild with
@@ -134,6 +136,12 @@ stronger guarantee, verified live, than the one the bug report assumed).
 Not run by `mise run test` — starts a real fzf per case, an order of
 magnitude slower than the rest of the suite, and needs `tmux` + `fzf`
 installed. Opt in with `mise run test-pty` or `bash vise/vise.pty.sh`.
+Missing `tmux`/`fzf` is a quiet skip (exit 0) locally, but a hard failure
+(exit 1) whenever `$CI` is set — a silent skip in CI is a green run that
+tested nothing. The `e2e` GitHub workflow runs it on `ubuntu-latest`,
+matrixed over `$SHELL` (`/bin/bash`, `/usr/bin/zsh` — fzf's `execute()`
+runs through `$SHELL -c`), path-filtered to skip the real work when
+nothing pty-relevant changed.
 
 ## Env
 
