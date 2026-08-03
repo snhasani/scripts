@@ -894,5 +894,29 @@ else
     bad "doctor: dead shorthand catches a bare coordinate absent from the registry" "rc=$rc out=[$out]"
 fi
 
+# 6. wrongly excluded: an `unavailable:` row means "Mason lists it but mise
+# has no backend". If mise's registry actually has a shorthand for that
+# exact name, the exclusion is stale and the row should be installable.
+EXCLUDED_DIR="$(mktemp -d "$DOCTOR_DIR/excluded.XXXXXX")"
+EXCLUDED_CATALOG="$EXCLUDED_DIR/catalog.tsv"
+cat >"$EXCLUDED_CATALOG" <<'EOF'
+unavailable:genuinely-unsupported	genuinely-unsupported	linter	misc	-	-	-	-
+unavailable:gofumpt	gofumpt	formatter	go	-	-	-	-
+EOF
+EXCLUDED_REGISTRY="$EXCLUDED_DIR/registry.json"
+cat >"$EXCLUDED_REGISTRY" <<'EOF'
+[{"short": "gofumpt", "backends": ["go:mvdan.cc/gofumpt/cmd/gofumpt"], "description": "A stricter gofmt"}]
+EOF
+out=$(VISE_CATALOG="$EXCLUDED_CATALOG" VISE_REGISTRY_JSON="$EXCLUDED_REGISTRY" \
+    VISE_OVERRIDES="$DOCTOR_EMPTY_OVERRIDES" bash "$VISE" doctor 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q 'wrongly excluded' &&
+    printf '%s\n' "$out" | grep -q 'gofumpt' &&
+    ! printf '%s\n' "$out" | grep -q 'genuinely-unsupported'; then
+    ok "doctor: wrongly excluded catches an unavailable row that mise can actually install"
+else
+    bad "doctor: wrongly excluded catches an unavailable row that mise can actually install" "rc=$rc out=[$out]"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
