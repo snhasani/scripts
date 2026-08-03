@@ -443,7 +443,10 @@ wa_dest3="$WA_DIR/mode.tsv"
 printf 'content\n' >"$wa_dest3"
 chmod 0640 "$wa_dest3"
 bash "$VISE" __write-atomic "$wa_dest3" printf 'new content\n' >/dev/null 2>&1
-mode_after=$(stat -f '%Lp' "$wa_dest3" 2>/dev/null || stat -c '%a' "$wa_dest3" 2>/dev/null)
+# GNU-first: see vise::mode_of's comment — GNU's `-f` means "filesystem
+# status" (succeeds, wrong output) rather than "format", so a BSD-first
+# fallback never reaches `-c` on Linux.
+mode_after=$(stat -c '%a' "$wa_dest3" 2>/dev/null || stat -f '%Lp' "$wa_dest3" 2>/dev/null)
 if [ "$mode_after" = "640" ]; then
     ok "write_atomic: preserves the destination's existing mode"
 else
@@ -462,7 +465,8 @@ else
     bad "write_atomic: creates dest when it doesn't exist yet" "$got4"
 fi
 
-mode4=$(stat -f '%Lp' "$wa_dest4" 2>/dev/null || stat -c '%a' "$wa_dest4" 2>/dev/null)
+# GNU-first: see vise::mode_of's comment.
+mode4=$(stat -c '%a' "$wa_dest4" 2>/dev/null || stat -f '%Lp' "$wa_dest4" 2>/dev/null)
 if [ "$mode4" = "644" ]; then
     ok "write_atomic: fresh file lands at 644, not mktemp's 600"
 else

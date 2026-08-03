@@ -605,9 +605,16 @@ vise::preview() {
 }
 
 # Cross-platform (GNU vs BSD stat) octal permission lookup, used by
-# vise::write_atomic to carry a destination's mode across the rename.
+# vise::write_atomic to carry a destination's mode across the rename. Order
+# matters: GNU's `-f` means "display FILESYSTEM status" (a different report
+# entirely, exit 0, no error), not "format" — so a BSD-first `-f` then `-c`
+# fallback would succeed on Linux with the wrong output, silently, and never
+# reach the `-c` branch. `-c` is GNU-only and fails cleanly on BSD/macOS
+# (`illegal option`), so trying it first works on both. One extra fork on
+# macOS only, and only once (this runs at most once per write_atomic call) —
+# not worth a startup-time OS check for that.
 vise::mode_of() {
-    stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null
+    stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null
 }
 
 # Runs the producer command "$@", capturing its stdout into a temp file that
