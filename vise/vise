@@ -1,0 +1,1395 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ((BASH_VERSINFO[0] < 5)); then
+    printf 'vise: needs bash >= 5 (found %s). macOS: brew install bash\n' "$BASH_VERSION" >&2
+    exit 1
+fi
+
+# bin/vise -> ../vise/vise is the repo's install shape; an unresolved link
+# leaves dirname pointing at bin/, so catalog lookup below silently falls
+# through to "no catalog" instead of finding it next to the real script.
+# readlink -f is GNU-only, hence this loop; a relative target resolves
+# against the link's OWN directory, not the caller's cwd.
+vise::resolve_self() {
+    local p="$1" target dir max=40
+    while [[ -L "$p" ]]; do
+        ((max--)) || {
+            printf 'vise: symlink loop resolving %s\n' "$1" >&2
+            exit 1
+        }
+        target="$(readlink "$p")"
+        case "$target" in
+        /*) p="$target" ;;
+        *)
+            dir="$(cd "$(dirname "$p")" && pwd)"
+            p="$dir/$target"
+            ;;
+        esac
+    done
+    printf '%s/%s' "$(cd "$(dirname "$p")" && pwd)" "$(basename "$p")"
+}
+SELF="$(vise::resolve_self "${BASH_SOURCE[0]}")"
+export SELF
+
+# catalog.tsv is the generated catalog (the upstream list with
+# catalog-overrides.tsv merged in). Falling back to the overrides alone keeps a
+# fresh checkout usable before the first `vise sync`.
+CATALOG_FILE="${VISE_CATALOG:-}"
+if [[ -z "$CATALOG_FILE" ]]; then
+    CATALOG_FILE="$(dirname "$SELF")/catalog.tsv"
+    [[ -r "$CATALOG_FILE" ]] || CATALOG_FILE="$(dirname "$SELF")/catalog-overrides.tsv"
+fi
+
+CATALOG_OUT="$(dirname "$SELF")/catalog.tsv"
+OVERRIDES_FILE="${VISE_OVERRIDES:-$(dirname "$SELF")/catalog-overrides.tsv}"
+CACHE_DIR="${VISE_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/vise}"
+MASON_URL="https://github.com/mason-org/mason-registry/releases/latest/download/registry.json.zip"
+
+VISE_VERBOSE="${VISE_VERBOSE:-0}"
+VISE_DEBUG="${VISE_DEBUG:-0}"
+
+NAME_W=34
+KIND_W=21
+LANG_W=26
+VER_W=12
+STARS_W=7
+
+# Logs go to stderr so they never contaminate `list` on stdout or the stream
+# fzf reads on reload. Inside the picker stderr would scribble over the screen,
+# so tui() redirects them to a file instead (see VISE_LOG_FILE).
+vise::log() {
+    [[ "${VISE_VERBOSE:-0}" == "1" ]] || return 0
+    if [[ -n "${VISE_LOG_FILE:-}" ]]; then
+        printf 'vise: %s\n' "$*" >>"$VISE_LOG_FILE"
+    else
+        printf 'vise: %s\n' "$*" >&2
+    fi
+}
+
+vise::debug() {
+    [[ "${VISE_DEBUG:-0}" == "1" ]] || return 0
+    if [[ -n "${VISE_LOG_FILE:-}" ]]; then
+        printf 'vise[debug]: %s\n' "$*" >>"$VISE_LOG_FILE"
+    else
+        printf 'vise[debug]: %s\n' "$*" >&2
+    fi
+}
+
+# Milliseconds. EPOCHREALTIME is bash 5+; the separator is locale-dependent,
+# hence the character class.
+vise::now_ms() {
+    local t=${EPOCHREALTIME/[.,]/}
+    printf '%s' "$((t / 1000))"
+}
+
+vise::usage() {
+    cat <<'EOF'
+vise — browse and manage mise-installed LSPs, linters and formatters.
+
+USAGE
+  vise                     open the picker
+  vise -l | list           print the rows, no fzf
+  vise -s | sync           rebuild catalog.tsv from the registry (needs network)
+  vise doctor              lint catalog.tsv offline; nonzero exit if broken
+  vise -h | --help         this text
+
+FLAGS
+  -v  | --v | --verbose    log what is happening
+  -vv | --debug            verbose plus timings and join statistics
+
+KEYS (in the picker)
+  ctrl-g   install into the global config
+  ctrl-t   install into this project
+  ctrl-x   remove (each tool from its own scope)
+  ctrl-u   upgrade
+  ctrl-s   cycle scope: all -> global -> project
+  ctrl-a   toggle tooling-only / all (starts tooling-only)
+  ctrl-o   open the tool's homepage in a browser
+  ctrl-r   reload
+  tab      multi-select; every action applies to the whole selection
+
+GLYPHS
+  ●  installed globally      ◐  installed in this project
+  ◍  in both configs         ○  not installed
+  ✗  no mise backend (listed for parity; install is refused)
+
+ENVIRONMENT
+  VISE_CATALOG=PATH    read a specific catalog file
+  VISE_OVERRIDES=PATH  read a specific overrides file during sync
+  VISE_FILTER=all      widen to every mise-managed tool (default: tooling-only)
+  VISE_SCOPE=global    start in a scope view (all|global|project)
+  VISE_PREVIEW_POS=up  put the detail pane above the list
+  VISE_DRY_RUN=1       print mise commands instead of running them
+  VISE_CACHE=DIR       cache location (default ${XDG_CACHE_HOME:-~/.cache}/vise)
+  VISE_NO_GH=1         skip GitHub stars/last-push during sync
+
+TEST SEAMS (not for interactive use — fixture files stand in for mise, see vise.smoke.sh)
+  VISE_CONFIG_JSON=PATH      replaces `mise config ls --json`
+  VISE_LS_JSON=PATH          replaces `mise ls --json`
+  VISE_REGISTRY_JSON=PATH    replaces `mise registry --json`
+  VISE_PREVIEW_LS_TEXT=PATH  replaces `mise ls -- <coord>` in the preview pane (plain text, not JSON)
+
+FILES
+  catalog.tsv            generated, the default. Rebuild with: vise sync
+  catalog-overrides.tsv  hand-curated rows, merged over the catalog on sync
+EOF
+}
+
+# Single choke point for every mise command that writes state, so
+# VISE_DRY_RUN can intercept all of them without touching real config.
+vise::mutate() {
+    if [[ "${VISE_DRY_RUN:-0}" == "1" ]]; then
+        printf 'DRY: %s\n' "$*" >&2
+        return 0
+    fi
+    vise::debug "exec: $*"
+    "$@"
+}
+
+# Rows marked unavailable are listed for parity with the upstream registry but
+# ship through an ecosystem mise has no backend for. Reports the reason and
+# drops each one individually into the caller's OWN array (via the $1
+# nameref) rather than withholding the whole batch: a tab multi-select's one
+# bad row must not withhold the coordinates that were fine (--help: "every
+# action applies to the whole selection"). Returns 1 if anything was
+# rejected, so the caller's exit code still says something was skipped.
+vise::partition_available() {
+    local -n valid_ref="$1"
+    shift
+    valid_ref=()
+    local c rc=0
+    for c in "$@"; do
+        if [[ "$c" == unavailable:* ]]; then
+            printf 'vise: %s has no mise backend (upstream ships it via composer/luarocks/opam/openvsx)\n' \
+                "${c#unavailable:}" >&2
+            rc=1
+        else
+            valid_ref+=("$c")
+        fi
+    done
+    return "$rc"
+}
+
+# fzf's {+1}/{+} placeholders expand to nothing when the filter matches zero
+# rows and nothing is tab-selected — an ordinary state, not a hostile one.
+# Zero args reaching mise unchecked is not "do nothing": `mise upgrade` and
+# bare `mise use`/`mise rm` variants treat "no tool" as "every tool", and
+# that behavior differs per subcommand, so it cannot be relied on. Refuse
+# here instead.
+vise::require_selection() {
+    local action="$1"
+    shift
+    if (($# == 0)); then
+        printf 'vise: no tool selected, refusing to %s\n' "$action" >&2
+        return 1
+    fi
+}
+
+vise::use_global() {
+    vise::require_selection "use-global" "$@" || return 1
+    local rc=0
+    local -a valid
+    vise::partition_available valid "$@" || rc=1
+    ((${#valid[@]} > 0)) && { vise::mutate mise use -g -- "${valid[@]}" || rc=1; }
+    return "$rc"
+}
+vise::use_project() {
+    vise::require_selection "use-project" "$@" || return 1
+    local rc=0
+    local -a valid
+    vise::partition_available valid "$@" || rc=1
+    ((${#valid[@]} > 0)) && { vise::mutate mise use -- "${valid[@]}" || rc=1; }
+    return "$rc"
+}
+vise::upgrade() {
+    vise::require_selection "upgrade" "$@" || return 1
+    local rc=0
+    local -a valid
+    vise::partition_available valid "$@" || rc=1
+    ((${#valid[@]} > 0)) && { vise::mutate mise upgrade -- "${valid[@]}" || rc=1; }
+    return "$rc"
+}
+
+# Each coordinate resolves its own scope rather than trusting the caller's,
+# so a mixed-scope multi-select removes every tool from its correct config
+# file instead of applying one row's flag to the whole batch.
+#
+# Every coordinate is attempted even after an earlier one fails: under this
+# script's `set -e`, an unguarded failure mid-loop used to abort the whole
+# batch, leaving every coordinate after the failed one untouched with no
+# report of what happened. Failures are collected and named in a summary
+# instead, with a nonzero exit so a script driving vise can tell.
+vise::rm() {
+    vise::require_selection "rm" "$@" || return 1
+    local coord scope coord_rc rc=0
+    local -a failed=()
+    for coord in "$@"; do
+        scope=$(vise::scope_of "$coord")
+        vise::log "remove $coord (scope: $scope)"
+        coord_rc=0
+        case "$scope" in
+        both)
+            vise::mutate mise rm -g -- "$coord" || coord_rc=1
+            vise::mutate mise rm -- "$coord" || coord_rc=1
+            ;;
+        global)
+            vise::mutate mise rm -g -- "$coord" || coord_rc=1
+            ;;
+        project)
+            vise::mutate mise rm -- "$coord" || coord_rc=1
+            ;;
+        none)
+            printf 'vise: %s is not tracked in any config, skipping\n' "$coord" >&2
+            ;;
+        esac
+        ((coord_rc == 0)) || failed+=("$coord")
+    done
+    if ((${#failed[@]} > 0)); then
+        printf 'vise: failed to remove: %s\n' "${failed[*]}" >&2
+        rc=1
+    fi
+    return "$rc"
+}
+
+# Honours MISE_GLOBAL_CONFIG_FILE and XDG_CONFIG_HOME, and resolves symlinks:
+# a dotfile manager (chezmoi, stow) makes mise report the real store path, and
+# a plain "~/.config/mise/" prefix test would then misfile global as project.
+vise::global_config() {
+    local p="${MISE_GLOBAL_CONFIG_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/mise/config.toml}"
+    realpath "$p" 2>/dev/null || printf '%s\n' "$p"
+}
+
+# mise's own paths get resolved the same way so both sides of the comparison
+# are canonical.
+vise::config_json() {
+    local raw resolved
+    if [[ -n "${VISE_CONFIG_JSON:-}" ]]; then
+        raw=$(cat "$VISE_CONFIG_JSON")
+    else
+        raw=$(mise config ls --json)
+    fi
+    resolved=$(printf '%s' "$raw" | jq -r '.[].path' | while IFS= read -r p; do
+        realpath "$p" 2>/dev/null || printf '%s\n' "$p"
+    done | jq -Rn '[inputs]')
+    jq -cn --argjson c "$raw" --argjson r "$resolved" \
+        '[range($c | length) | $c[.] + {path: $r[.]}]'
+}
+
+# Scope (global/project/both/none) comes from mise config ls --json, per the
+# join rule: a coordinate's scope is which config file(s) list it, not
+# whether it happens to be installed.
+vise::scope_of() {
+    local coord="$1"
+    vise::config_json | jq -r --arg coord "$coord" --arg global_cfg "$(vise::global_config)" '
+    (reduce .[] as $e ({global: [], project: []};
+      if ($e.path == $global_cfg)
+      then .global += $e.tools
+      else .project += $e.tools
+      end)) as $scopes
+    | (($scopes.global | index($coord)) != null) as $g
+    | (($scopes.project | index($coord)) != null) as $p
+    | if $g and $p then "both"
+      elif $g then "global"
+      elif $p then "project"
+      else "none"
+      end
+  '
+}
+
+# Flips the on-disk filter state fzf's ctrl-a bind reads on reload. A fresh
+# subshell per bind can't mutate the parent fzf process's environment, so
+# the toggle has to live on disk rather than in a variable.
+vise::toggle_filter() {
+    local state_file="${VISE_STATE:?vise: VISE_STATE is required for __toggle-filter}"
+    local current
+    current=$(cat "$state_file" 2>/dev/null || echo all)
+    if [[ "$current" == "tooling" ]]; then
+        echo all >"$state_file"
+    else
+        echo tooling >"$state_file"
+    fi
+}
+
+# all -> global -> project -> all. Same on-disk trick as toggle_filter.
+vise::cycle_scope() {
+    local state_file="${VISE_SCOPE_STATE:?vise: VISE_SCOPE_STATE is required for __cycle-scope}"
+    local current
+    current=$(cat "$state_file" 2>/dev/null || echo all)
+    case "$current" in
+    all) echo global >"$state_file" ;;
+    global) echo project >"$state_file" ;;
+    *) echo all >"$state_file" ;;
+    esac
+}
+
+# Explicit arg wins, then the on-disk toggle state, then the env default. The
+# prompt and the renderer both resolve through here so they cannot disagree
+# about which mode is active. Default is tooling-only: the picker exists to
+# browse LSPs/linters/formatters, not the runtimes and package managers that
+# also ride along in $observed (vise::render unions the catalog with
+# everything mise manages) — ctrl-a widens to "all" when one of those needs
+# managing here too.
+vise::filter_mode() {
+    local mode="${1:-}"
+    if [[ -z "$mode" && -n "${VISE_STATE:-}" && -r "${VISE_STATE:-}" ]]; then
+        mode=$(<"$VISE_STATE")
+    fi
+    printf '%s\n' "${mode:-${VISE_FILTER:-tooling}}"
+}
+
+vise::scope_mode() {
+    local mode="${1:-}"
+    if [[ -z "$mode" && -n "${VISE_SCOPE_STATE:-}" && -r "${VISE_SCOPE_STATE:-}" ]]; then
+        mode=$(<"$VISE_SCOPE_STATE")
+    fi
+    printf '%s\n' "${mode:-${VISE_SCOPE:-all}}"
+}
+
+# macOS "open"; xdg-open elsewhere. Silent no-op when the row has no homepage
+# so ctrl-o on an uncatalogued tool does nothing instead of erroring.
+vise::open_url() {
+    local url="${1:-}"
+    if [[ -z "$url" || "$url" == "-" ]]; then
+        vise::log "no homepage for this row, nothing to open"
+        return 0
+    fi
+    vise::log "opening $url"
+    if command -v open >/dev/null 2>&1; then
+        open "$url"
+    elif command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "$url"
+    fi
+}
+
+vise::prompt() {
+    local scope filter suffix=""
+    scope=$(vise::scope_mode)
+    filter=$(vise::filter_mode)
+    [[ "$filter" == "tooling" ]] && suffix=" +tooling"
+    printf 'vise %s%s> ' "$scope" "$suffix"
+}
+
+vise::render() {
+    local filter_mode scope_mode
+    filter_mode=$(vise::filter_mode "${1:-}")
+    scope_mode=$(vise::scope_mode "${2:-}")
+
+    local catalog_file="$CATALOG_FILE"
+    if [[ -r "$catalog_file" ]]; then
+        vise::log "catalog $catalog_file ($(grep -cvE '^[[:space:]]*(#|$)' "$catalog_file") rows)"
+    else
+        vise::log "no catalog at $catalog_file, listing installed tools only"
+        catalog_file=/dev/null
+    fi
+    vise::log "filter=$filter_mode scope=$scope_mode"
+
+    local catalog_json config_json ls_json registry_json
+    catalog_json=$(jq -R -n '
+    [inputs
+      | select(length > 0)
+      | select(startswith("#") | not)
+      | split("\t")
+      # 4 columns is the hand-written catalog.tsv shape; gen-map adds four
+      # more. Accept both so either file works unchanged.
+      | select(length >= 4)
+      | {coordinate: .[0], name: .[1], kind: .[2], language: .[3],
+         homepage: (.[4] // "-"), stars: (.[5] // "-"), updated: (.[6] // "-"),
+         description: (.[7] // "-")}]
+  ' "$catalog_file")
+    local t0
+    t0=$(vise::now_ms)
+    config_json=$(vise::config_json)
+    vise::debug "mise config ls  $(($(vise::now_ms) - t0))ms"
+    t0=$(vise::now_ms)
+    if [[ -n "${VISE_LS_JSON:-}" ]]; then
+        ls_json=$(cat "$VISE_LS_JSON")
+    else
+        ls_json=$(mise ls --json)
+    fi
+    vise::debug "mise ls         $(($(vise::now_ms) - t0))ms"
+    t0=$(vise::now_ms)
+    if [[ -n "${VISE_REGISTRY_JSON:-}" ]]; then
+        registry_json=$(cat "$VISE_REGISTRY_JSON")
+    else
+        registry_json=$(mise registry --json)
+    fi
+    vise::debug "mise registry   $(($(vise::now_ms) - t0))ms"
+    vise::debug "global config   $(vise::global_config)"
+
+    # --argjson passes the whole JSON text as ONE argv string. macOS enforces
+    # only the aggregate ARG_MAX, so this was invisible there, but Linux's
+    # execve additionally caps any SINGLE argv string at MAX_ARG_STRLEN
+    # (128KiB, 32 pages) — and catalog.tsv's JSON encoding clears that easily,
+    # taking the whole picker down with "Argument list too long" (render
+    # emits nothing, so fzf has no rows). Staging each blob in a scratch dir
+    # and handing jq the paths (--rawfile + fromjson) routes the data through
+    # the filesystem instead of argv, on both platforms.
+    #
+    # Unlike vise::write_atomic, this does NOT save/restore whatever EXIT trap
+    # the caller already owned: vise::tui pipes into this function
+    # (`vise::render | fzf`), which runs it in a throwaway subshell that
+    # inherits vise::tui's trap referencing vise::tui's *own* local
+    # ($state_dir). Restoring and then letting THIS subshell exit fires that
+    # trap while still holding a live binding to $state_dir — deleting
+    # vise::tui's scratch dir out from under it, before vise::tui itself is
+    # anywhere near done with it. This function only ever owns its own
+    # scratch dir, so it only ever needs to clear its OWN trap, never
+    # resurrect an inherited one.
+    local scratch
+    scratch=$(mktemp -d) || return 1
+    # shellcheck disable=SC2064 # deliberately eager: see vise::write_atomic
+    trap "rm -rf '$scratch'" EXIT
+    printf '%s' "$catalog_json" >"$scratch/catalog.json"
+    printf '%s' "$config_json" >"$scratch/config.json"
+    printf '%s' "$ls_json" >"$scratch/ls.json"
+    printf '%s' "$registry_json" >"$scratch/registry.json"
+
+    local rc=0
+    jq -rn \
+        --rawfile catalog_raw "$scratch/catalog.json" \
+        --rawfile config_raw "$scratch/config.json" \
+        --rawfile lsdata_raw "$scratch/ls.json" \
+        --rawfile registry_raw "$scratch/registry.json" \
+        --arg global_cfg "$(vise::global_config)" \
+        --arg filter_mode "$filter_mode" \
+        --arg scope_mode "$scope_mode" \
+        --argjson name_w "$NAME_W" \
+        --argjson kind_w "$KIND_W" \
+        --argjson lang_w "$LANG_W" \
+        --argjson ver_w "$VER_W" \
+        --argjson stars_w "$STARS_W" '
+    ($catalog_raw | fromjson) as $catalog
+    | ($config_raw | fromjson) as $config
+    | ($lsdata_raw | fromjson) as $lsdata
+    | ($registry_raw | fromjson) as $registry
+    # Character-based padding: printf %-*.*s pads/truncates by byte, and the
+    # glyphs (and any non-ASCII catalog text) are multi-byte UTF-8, so a byte
+    # cut can slice one in half. jq string length/slicing is codepoint-based.
+    | def pad($w):
+      tostring as $t
+      | ($t | length) as $n
+      | if $n > $w then $t[0:$w] else $t + (" " * ($w - $n)) end;
+
+    def version_for($coord):
+      ($lsdata[$coord] // []) as $entries
+      | if ($entries | length) == 0 then null
+        else (([$entries[] | select(.active == true)] | first) // $entries[0]).version
+        end;
+
+    # The same tool is spelled differently depending on which backend you
+    # installed it through: aqua:tamasfe/taplo, github:tamasfe/taplo and the
+    # bare shorthand taplo are one tool. Comparing coordinate strings shows it
+    # twice — once installed-but-unknown, once known-but-not-installed. So
+    # collapse every spelling to an ecosystem+identity key and join on that.
+    # aqua and ubi both resolve to GitHub repos, so they fold into "gh".
+    def ident($c):
+      ($c | split(":")[0]) as $be
+      | ($c | sub("^[^:]+:"; "") | ascii_downcase) as $rest
+      | if $be == "aqua" or $be == "ubi" or $be == "github" then "gh|" + $rest
+        elif $be == "pipx" then "pypi|" + $rest
+        elif $be == "npm" or $be == "cargo" or $be == "go" or $be == "gem"
+             or $be == "dotnet" then $be + "|" + $rest
+        else $be + "|" + $rest
+        end;
+
+    # A bare shorthand carries no backend, so its identity is whatever the mise
+    # registry says it installs from, plus the shorthand itself.
+    ($registry | INDEX(.short)) as $reg
+    | def idents($c):
+        if ($c | test(":")) then [ident($c)]
+        else ["short|" + ($c | ascii_downcase)]
+             + ((($reg[$c].backends) // []) | map(ident(.)))
+        end;
+
+    (reduce $config[] as $e ({global: [], project: []};
+      if ($e.path == $global_cfg)
+      then .global += $e.tools
+      else .project += $e.tools
+      end)) as $scopes
+    | (reduce ($catalog[] | {row: ., ids: idents(.coordinate)}) as $c
+        ({}; reduce $c.ids[] as $i (.; .[$i] //= $c.row))) as $byident
+    | (([$config[] | .tools[]] + ($lsdata | keys)) | unique) as $observed
+    | [ $observed[] | {obs: ., cat: ([idents(.)[] | $byident[.]] | map(select(. != null)) | first)} ] as $seen
+    | ([$seen[] | .cat.coordinate | select(. != null)] | unique) as $claimed
+    | [ ($seen[] | {coord: .obs,
+                    name: (.cat.name // .obs),
+                    kind: (.cat.kind // "?"),
+                    language: (.cat.language // "?"),
+                    homepage: (.cat.homepage // "-"),
+                    stars: (.cat.stars // "-"),
+                    updated: (.cat.updated // "-"),
+                    description: (.cat.description // "-")}),
+        # index/1 on an array is exact-element; inside/contains would substring
+        # match here and silently drop "ty" because of "npm:typescript".
+        ($catalog[] | . as $row
+                    | select(($claimed | index($row.coordinate)) == null)
+                    | {coord: $row.coordinate, name: $row.name,
+                       kind: $row.kind, language: $row.language,
+                       homepage: $row.homepage, stars: $row.stars,
+                       updated: $row.updated, description: $row.description})
+      ]
+    | map(select($filter_mode != "tooling" or .kind != "?"))
+    | map(. as $r
+          | (($scopes.global | index($r.coord)) != null) as $is_global
+          | (($scopes.project | index($r.coord)) != null) as $is_project
+          | $r + {version: (version_for($r.coord) // "-"),
+                  scopecode: (if $is_global and $is_project then "both"
+                              elif $is_global then "global"
+                              elif $is_project then "project"
+                              else "none"
+                              end)})
+    | map(select($scope_mode == "all"
+                 or ($scope_mode == "global" and (.scopecode | . == "global" or . == "both"))
+                 or ($scope_mode == "project" and (.scopecode | . == "project" or . == "both"))))
+    | sort_by([(if .scopecode == "none" then 1 else 0 end), (.name | ascii_downcase)])
+    | .[]
+    | (if (.coord | startswith("unavailable:")) then "✗"
+       elif .scopecode == "both" then "◍"
+       elif .scopecode == "global" then "●"
+       elif .scopecode == "project" then "◐"
+       else "○"
+       end) as $glyph
+    # Fields 8..10 are carried for the preview and the browser bind but are
+    # neither displayed nor searched (see --with-nth).
+    | [.coord, .scopecode,
+       (($glyph + " " + .name) | pad($name_w)),
+       (.kind | pad($kind_w)),
+       (.language | pad($lang_w)),
+       (.version | pad($ver_w)),
+       (.stars | pad($stars_w)),
+       .homepage, .updated, .description]
+    | @tsv
+  ' || rc=$?
+
+    trap - EXIT
+    rm -rf "$scratch"
+    return "$rc"
+}
+
+vise::list() {
+    vise::render
+}
+
+vise::trim() {
+    local s="$*"
+    s="${s#"${s%%[![:space:]]*}"}"
+    printf '%s' "${s%"${s##*[![:space:]]}"}"
+}
+
+vise::field() { printf '%-12s %s\n' "$1" "$2"; }
+
+# Metadata arrives as arguments rather than being looked up again: render has
+# already resolved the identity join, and a second lookup here would miss every
+# tool whose installed coordinate differs from the catalog's spelling. Values
+# come in display-padded, so each is trimmed back here.
+vise::preview() {
+    local coord scope name kind lang version stars homepage updated description
+    coord=$(vise::trim "${1:-}")
+    scope=$(vise::trim "${2:-}")
+    name=$(vise::trim "${3:-}")
+    kind=$(vise::trim "${4:-}")
+    lang=$(vise::trim "${5:-}")
+    version=$(vise::trim "${6:-}")
+    stars=$(vise::trim "${7:-}")
+    homepage=$(vise::trim "${8:-}")
+    updated=$(vise::trim "${9:-}")
+    description=$(vise::trim "${10:-}")
+    name="${name#* }" # drop the leading status glyph
+
+    local width="${FZF_PREVIEW_COLUMNS:-78}"
+
+    vise::field name "$name"
+    vise::field kind "$kind"
+    vise::field language "$lang"
+    vise::field coordinate "$coord"
+    vise::field scope "$scope"
+    [[ "$version" != "-" ]] && vise::field version "$version"
+    if [[ "$description" != "-" && -n "$description" ]]; then
+        printf '\n'
+        printf '%s\n' "$description" | fold -s -w "$width"
+    fi
+
+    if [[ "$homepage" != "-" || "$stars" != "-" ]]; then
+        printf '\n%s\n' "$(printf '─%.0s' $(seq 1 "$width"))"
+        [[ "$homepage" != "-" ]] && vise::field url "$homepage"
+        [[ "$stars" != "-" ]] && vise::field stars "$stars"
+        [[ "$updated" != "-" ]] && vise::field "last push" "$updated"
+    fi
+
+    # ls_rc is captured separately from the `|| true` that used to guard this
+    # call: that pattern discarded mise's exit status entirely, so a missing
+    # mise (127, "command not found") rendered the identical "(not installed)"
+    # text as a genuine empty result. VISE_PREVIEW_LS_TEXT stands in for the
+    # call itself (mirrors VISE_CONFIG_JSON/VISE_LS_JSON/VISE_REGISTRY_JSON,
+    # but plain text — `mise ls` without `--json` has a different shape) and
+    # always counts as a successful run, so a fixture can represent "mise ran,
+    # found nothing installed" without needing a real mise ever near it.
+    local ls_out ls_rc=0
+    if [[ -n "${VISE_PREVIEW_LS_TEXT:-}" ]]; then
+        ls_out=$(cat "$VISE_PREVIEW_LS_TEXT")
+    else
+        ls_out=$(mise ls -- "$coord" 2>/dev/null) || ls_rc=$?
+    fi
+    printf '\n%s\n' "$(printf '─%.0s' $(seq 1 "$width"))"
+    if ((ls_rc != 0)); then
+        echo "(could not verify: mise ls failed)"
+    elif [[ -z "$ls_out" ]]; then
+        echo "(not installed)"
+    else
+        printf '%s\n' "$ls_out"
+    fi
+}
+
+# Cross-platform (GNU vs BSD stat) octal permission lookup, used by
+# vise::write_atomic to carry a destination's mode across the rename. Order
+# matters: GNU's `-f` means "display FILESYSTEM status" (a different report
+# entirely, exit 0, no error), not "format" — so a BSD-first `-f` then `-c`
+# fallback would succeed on Linux with the wrong output, silently, and never
+# reach the `-c` branch. `-c` is GNU-only and fails cleanly on BSD/macOS
+# (`illegal option`), so trying it first works on both. One extra fork on
+# macOS only, and only once (this runs at most once per write_atomic call) —
+# not worth a startup-time OS check for that.
+vise::mode_of() {
+    stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null
+}
+
+# Runs the producer command "$@", capturing its stdout into a temp file that
+# lives beside <dest> — mv is only atomic within one filesystem, and $TMPDIR
+# is frequently a different one on macOS — then renames it over <dest> only
+# if the producer exited zero. A live pipe's reading side can never tell a
+# producer that finished from one that wrote a few lines and died: EOF looks
+# identical either way. Running the producer ourselves, checked via a normal
+# redirect, is what makes "only on success" a real guarantee instead of a
+# pipefail-shaped illusion — it's the fix for catalog.tsv getting truncated
+# to whatever a failing sync had managed to print before it died.
+vise::write_atomic() {
+    local dest="$1"
+    shift
+    local dir tmp mode="644"
+    dir=$(dirname "$dest")
+    tmp=$(mktemp "$dir/.vise-XXXXXX") || return 1
+
+    # Installed above the mode_of lookup: the right operand of && below is
+    # NOT set -e-exempt, so a failing mode_of would otherwise abort the
+    # function before any trap existed to clean up the temp file.
+    # vise::tui already owns an EXIT trap; save and restore it verbatim so
+    # our temp-file cleanup adds to it instead of clobbering it.
+    local prev_trap
+    prev_trap=$(trap -p EXIT)
+    # $tmp is expanded NOW, not deferred: a local var doesn't survive into the
+    # trap's execution context if set -e tears down this function's frame
+    # abnormally (e.g. mode_of failing below) — a deferred '$tmp' would
+    # then hit set -u's unbound-variable error instead of running the cleanup.
+    # shellcheck disable=SC2064 # deliberately eager: see comment above
+    trap "rm -f '$tmp'" EXIT
+
+    [[ -e "$dest" ]] && mode=$(vise::mode_of "$dest")
+
+    local ok=1
+    if ! "$@" >"$tmp"; then
+        ok=0
+    elif [[ -n "$mode" ]] && ! chmod "$mode" "$tmp"; then
+        ok=0
+    elif ! mv -f "$tmp" "$dest"; then
+        ok=0
+    fi
+
+    if [[ -n "$prev_trap" ]]; then
+        eval "$prev_trap"
+    else
+        trap - EXIT
+    fi
+
+    [[ "$ok" -eq 1 ]] && return 0
+    rm -f "$tmp"
+    return 1
+}
+
+# The body of vise::sync's catalog write, split out so vise::write_atomic can
+# run it behind a checked redirect instead of the redirect writing straight
+# to the live catalog.
+vise::sync_body() {
+    local gh_cache="$1"
+    printf '# coordinate\tname\tkind\tlanguage\thomepage\tstars\tupdated\tdescription\n'
+    printf '# Generated by "vise sync" from the Mason registry, mise registry and GitHub.\n'
+    printf '# Do not hand-edit; edits are lost on sync. Use catalog-overrides.tsv instead.\n'
+    awk -F'\t' -v OFS='\t' -v ghc="$gh_cache" '
+      BEGIN {
+        while ((getline line < ghc) > 0) {
+          split(line, g, "\t")
+          if (g[1] != "") { stars[g[1]] = g[2]; upd[g[1]] = g[3] }
+        }
+      }
+      { if ($5 ~ /^https:\/\/github\.com\/[^\/]+\/[^\/]+\/?$/) {
+          n = split($5, p, "/"); r = p[4] "/" p[5]; sub(/\/$/, "", r)
+          if (r in stars) { $6 = stars[r]; $7 = upd[r] }
+        }
+        print
+      }
+    ' "$CACHE_DIR/merged.tsv" | sort -t"$(printf '\t')" -k2,2f
+}
+
+# Pulled out of vise::sync so `__merge-overrides` can drive it directly with
+# fixture files — the rest of sync needs the Mason/GitHub network fetch, this
+# step doesn't.
+#
+# The overrides file wins on coordinate/kind/language: it holds hand-verified
+# install paths for tools whose Mason PURL points somewhere mise cannot reach
+# (jdtls, omnisharp, kotlin-language-server are "generic" upstream). A
+# coordinate is a row's identity; a name is mutable metadata. Each override is
+# resolved to AT MOST ONE base row before anything is written: match by
+# coordinate and match by name are computed independently, and the override
+# applies only where they agree (one of the two is absent, or both name the
+# same row) — coordinate unchanged, name/kind/language stamped from the
+# override for a coordinate-match; coordinate/kind/language stamped for a
+# name-match. Two former bugs lived in doing this per-row instead: matching
+# by name only meant a coordinate-only rename left the row untouched and
+# appended the override's coordinate below as a second, blank row sharing it;
+# checking coordinate as a same-row fallback (no cross-row agreement check)
+# meant an override whose name matched one row and whose coordinate happened
+# to equal a DIFFERENT row's coordinate fired on both independently, forking
+# a duplicate coordinate from the other direction. Neither reading is
+# guessable from the override alone, so a disagreement — by coordinate vs.
+# name pointing at two different rows, or two different overrides pointing at
+# one row — is reported to stderr and left unapplied (and NOT appended
+# either: appending would recreate the same collision by coordinate a second
+# way). An override matched neither way is genuinely new and is appended as
+# its own synthetic row.
+vise::merge_overrides() {
+    local base="$1" overrides="$2"
+    [[ -r "$overrides" ]] || overrides=/dev/null
+    awk -F'\t' -v OFS='\t' -v overrides="$overrides" '
+    BEGIN {
+      n = 0
+      while ((getline line < overrides) > 0) {
+        if (line ~ /^[[:space:]]*(#|$)/) continue
+        split(line, f, "\t")
+        if (f[2] == "") continue
+        n++
+        ocoord[n] = f[1]; oname[n] = f[2]; okind[n] = f[3]; olang[n] = f[4]
+      }
+    }
+    { m++; brow[m] = $0; bcoord[m] = $1; bname[m] = $2 }
+    END {
+      bad = 0
+      for (j = 1; j <= m; j++) { coord_row[bcoord[j]] = j; name_row[bname[j]] = j }
+
+      for (i = 1; i <= n; i++) {
+        ct = (ocoord[i] in coord_row) ? coord_row[ocoord[i]] : 0
+        nt = (oname[i] in name_row) ? name_row[oname[i]] : 0
+        if (ct != 0 && nt != 0 && ct != nt) {
+          printf "vise: merge: override %s / %s is ambiguous (name matches row at %s, coordinate matches row at %s), skipping\n", \
+            ocoord[i], oname[i], bcoord[nt], bcoord[ct] > "/dev/stderr"
+          rejected[i] = 1
+          bad = 1
+          continue
+        }
+        target[i] = (ct != 0) ? ct : nt
+      }
+
+      # A row claimed by more than one surviving override is the same
+      # collision from the other direction: applying either would silently
+      # discard the other override entirely.
+      for (i = 1; i <= n; i++) {
+        if ((i in rejected) || target[i] == 0) continue
+        owners[target[i]]++
+      }
+      for (i = 1; i <= n; i++) {
+        if ((i in rejected) || target[i] == 0) continue
+        r = target[i]
+        if (owners[r] > 1) {
+          printf "vise: merge: row %s is claimed by more than one override, skipping\n", bcoord[r] > "/dev/stderr"
+          rejected[i] = 1
+          bad = 1
+        }
+      }
+      for (i = 1; i <= n; i++) {
+        if ((i in rejected) || target[i] == 0) continue
+        row_owner[target[i]] = i
+      }
+
+      for (j = 1; j <= m; j++) {
+        split(brow[j], f, "\t")
+        if (j in row_owner) {
+          i = row_owner[j]
+          f[1] = ocoord[i]; f[2] = oname[i]; f[3] = okind[i]; f[4] = olang[i]
+          consumed[i] = 1
+        }
+        print f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8]
+      }
+      for (i = 1; i <= n; i++)
+        if (!(i in rejected) && !(i in consumed))
+          print ocoord[i], oname[i], okind[i], olang[i], "-", "-", "-", "-"
+
+      exit bad
+    }
+  ' "$base"
+}
+
+# Rebuilds catalog.tsv. The only command here that touches the network — the picker
+# itself is always offline.
+#
+# Mason's registry is the list of what counts as editor tooling: it is the only
+# machine-readable source with real LSP/Linter/Formatter categories. mise's
+# registry holds ~85 editor tools out of 999, so it supplies nicer names, not
+# the list. GitHub supplies stars and last-push for the ~2/3 hosted there.
+vise::sync() {
+    local out="${1:-$CATALOG_OUT}"
+    local overrides="$OVERRIDES_FILE"
+    [[ -r "$overrides" ]] || overrides=/dev/null
+    local gh_cache="$CACHE_DIR/gh-meta.tsv"
+
+    mkdir -p "$CACHE_DIR"
+    vise::log "cache $CACHE_DIR"
+    vise::log "downloading Mason registry"
+    local t0
+    t0=$(vise::now_ms)
+    curl -fsSL -o "$CACHE_DIR/registry.json.zip" "$MASON_URL"
+    unzip -oq "$CACHE_DIR/registry.json.zip" -d "$CACHE_DIR"
+    vise::debug "download+unzip  $(($(vise::now_ms) - t0))ms"
+    vise::log "Mason packages: $(jq length "$CACHE_DIR/registry.json")"
+    mise registry --json >"$CACHE_DIR/mise-registry.json"
+    vise::log "mise registry shorthands: $(jq length "$CACHE_DIR/mise-registry.json")"
+
+    jq -rn \
+        --slurpfile mason "$CACHE_DIR/registry.json" \
+        --slurpfile mise "$CACHE_DIR/mise-registry.json" '
+    ($mise[0] | map(.short) | INDEX(.)) as $shorts
+    | [ $mason[0][]
+        | select(.categories | any(. == "LSP" or . == "Linter" or . == "Formatter"))
+        | . as $p
+        | ($p.source.id | sub("^pkg:"; "") | sub("@[^@]*$"; "")) as $rest
+        | ($rest | split("/")) as $parts
+        | $parts[0] as $type
+        | (($parts[1:] | join("/")) | gsub("%40"; "@")) as $ident
+        # A mise shorthand is preferred when one exists: shorter to type, and
+        # it lets mise pick the backend. Otherwise derive one from the PURL.
+        | (if $shorts[$p.name] then $p.name
+           elif $type == "github" then "github:" + $ident
+           elif $type == "npm" then "npm:" + $ident
+           elif $type == "pypi" then "pipx:" + $ident
+           elif $type == "cargo" then "cargo:" + $ident
+           elif $type == "golang" then "go:" + $ident
+           elif $type == "gem" then "gem:" + $ident
+           elif $type == "nuget" then "dotnet:" + $ident
+           # composer/luarocks/opam/openvsx and most generic PURLs have no mise
+           # backend. Listed anyway so the catalog matches Mason one-for-one.
+           else "unavailable:" + $p.name end) as $coord
+        | {coord: $coord,
+           name: $p.name,
+           kind: ($p.categories | map(ascii_downcase)
+                  | map(select(. == "lsp" or . == "linter" or . == "formatter"))
+                  | join(",")),
+           language: (($p.languages // []) | map(ascii_downcase) | join(",")
+                      | if . == "" then "any" else . end),
+           homepage: ($p.homepage // "-"),
+           # Tabs and newlines would corrupt the TSV; deprecation is worth
+           # seeing in the picker, so it is folded into the description rather
+           # than given a column nothing else uses.
+           description: ((if $p.deprecation then "DEPRECATED: " + ($p.deprecation.message // "") + " — " else "" end)
+                         + ($p.description // "-")
+                         | gsub("[\t\n\r]+"; " ") | sub("^ +"; "") | sub(" +$"; ""))} ]
+    | unique_by(.coord)
+    | .[]
+    | [.coord, .name, .kind, .language, .homepage, "-", "-", .description]
+    | @tsv
+  ' >"$CACHE_DIR/base.tsv"
+    vise::log "editor tools from Mason: $(wc -l <"$CACHE_DIR/base.tsv" | tr -d ' ')"
+    vise::debug "unavailable (no mise backend): $(awk -F'\t' '$1 ~ /^unavailable:/' "$CACHE_DIR/base.tsv" | wc -l | tr -d ' ')"
+
+    vise::merge_overrides "$CACHE_DIR/base.tsv" "$overrides" >"$CACHE_DIR/merged.tsv"
+    vise::log "after merging $overrides: $(wc -l <"$CACHE_DIR/merged.tsv" | tr -d ' ') rows"
+
+    # Stars are a nice-to-have, never a hard dependency: any problem here
+    # degrades to "-" in those two columns and the catalog is still complete.
+    touch "$gh_cache"
+    local gh_ok=1
+    if [[ "${VISE_NO_GH:-0}" == "1" ]]; then
+        gh_ok=0
+        printf 'note: VISE_NO_GH=1, skipping stars and last-updated\n' >&2
+    elif ! command -v gh >/dev/null 2>&1; then
+        gh_ok=0
+        printf 'warning: gh not installed, skipping stars and last-updated\n' >&2
+    elif ! gh auth status >/dev/null 2>&1; then
+        gh_ok=0
+        printf 'warning: gh not authenticated (run: gh auth login), skipping stars\n' >&2
+    fi
+
+    if [[ "$gh_ok" == "1" ]]; then
+        awk -F'\t' '$5 ~ /^https:\/\/github\.com\/[^\/]+\/[^\/]+\/?$/ {
+      n = split($5, p, "/"); repo = p[4] "/" p[5]; sub(/\/$/, "", repo); print repo
+    }' "$CACHE_DIR/merged.tsv" | sort -u >"$CACHE_DIR/repos.txt"
+        cut -f1 "$gh_cache" | sort -u >"$CACHE_DIR/have.txt"
+        comm -23 "$CACHE_DIR/repos.txt" "$CACHE_DIR/have.txt" >"$CACHE_DIR/need.txt"
+        printf 'fetching GitHub metadata for %s repos (%s cached)\n' \
+            "$(grep -c . "$CACHE_DIR/need.txt" || true)" \
+            "$(grep -c . "$CACHE_DIR/have.txt" || true)" >&2
+        # A 404 (repo moved or renamed) must not abort the whole sync.
+        xargs -P 8 -I{} sh -c \
+            'gh api "repos/{}" --jq "\"{}\t\(.stargazers_count)\t\(.pushed_at[0:10])\"" 2>/dev/null || true' \
+            <"$CACHE_DIR/need.txt" >>"$gh_cache"
+    fi
+
+    if ! vise::write_atomic "$out" vise::sync_body "$gh_cache"; then
+        printf 'vise: sync failed while building the catalog; %s left untouched\n' "$out" >&2
+        return 1
+    fi
+
+    printf 'wrote %s (%s tools, %s with stars)\n' \
+        "$out" "$(grep -cvE '^#' "$out")" \
+        "$(awk -F'\t' '!/^#/ && $6 != "-"' "$out" | wc -l | tr -d ' ')" >&2
+}
+
+# Every column-count row is malformed by definition (the generator always
+# emits 8), so it's named individually rather than just counted.
+vise::doctor_columns() {
+    local catalog="$1"
+    awk -F'\t' '
+        /^[[:space:]]*(#|$)/ { next }
+        NF != 8 { printf "vise: doctor: column count: expected 8 fields, got %d: %s\n", NF, $0; bad = 1 }
+        END { exit bad }
+    ' "$catalog"
+}
+
+# Offline lint over catalog.tsv, cheap enough to always run before install:
+# each check is its own function so a broken predicate reddens exactly one
+# smoke test instead of the whole subcommand. Silent + exit 0 on a clean
+# catalog; otherwise every violation is printed and the exit code says so.
+vise::doctor_empty_fields() {
+    local catalog="$1"
+    awk -F'\t' '
+        /^[[:space:]]*(#|$)/ { next }
+        $1 == "" || $2 == "" || $3 == "" || $4 == "" {
+            printf "vise: doctor: empty field: %s\n", $0; bad = 1
+        }
+        END { exit bad }
+    ' "$catalog"
+}
+
+# The one confirmed bug (spec item 3): an override-merge collision stamps one
+# coordinate onto two rows under different names. Names sharing the
+# coordinate are listed so the report points straight at the collision.
+vise::doctor_dup_coord() {
+    local catalog="$1" dups coord names rc=0
+    dups=$(awk -F'\t' '!/^[[:space:]]*(#|$)/ {print $1}' "$catalog" | sort | uniq -d)
+    [[ -z "$dups" ]] && return 0
+    while IFS= read -r coord; do
+        [[ -z "$coord" ]] && continue
+        names=$(awk -F'\t' -v c="$coord" '$1 == c {print $2}' "$catalog" | paste -sd, -)
+        printf 'vise: doctor: duplicate coordinate: %s (%s)\n' "$coord" "$names"
+        rc=1
+    done <<<"$dups"
+    return "$rc"
+}
+
+# Regression guard (0 today): two coordinates sharing one name would give
+# the picker's identity join two candidates to collapse onto one row.
+vise::doctor_dup_name() {
+    local catalog="$1" dups name coords rc=0
+    dups=$(awk -F'\t' '!/^[[:space:]]*(#|$)/ {print $2}' "$catalog" | sort | uniq -d)
+    [[ -z "$dups" ]] && return 0
+    while IFS= read -r name; do
+        [[ -z "$name" ]] && continue
+        coords=$(awk -F'\t' -v n="$name" '$2 == n {print $1}' "$catalog" | paste -sd, -)
+        printf 'vise: doctor: duplicate name: %s (%s)\n' "$name" "$coords"
+        rc=1
+    done <<<"$dups"
+    return "$rc"
+}
+
+# A bare coordinate (no "backend:" prefix) only resolves through mise's own
+# shorthand table; one absent from it installs nothing and fails silently.
+#
+# comm over two pre-sorted lists, not a per-coordinate grep loop: ~535 rows
+# means dozens of bare coordinates, and a subprocess per one blew doctor's
+# 200ms budget on its own (measured: ~120ms for this check alone).
+vise::doctor_dead_shorthand() {
+    local catalog="$1" shorts="$2" bare missing coord
+    bare=$(awk -F'\t' '!/^[[:space:]]*(#|$)/ && $1 !~ /:/ {print $1}' "$catalog" | sort -u)
+    [[ -z "$bare" ]] && return 0
+    missing=$(comm -23 <(printf '%s\n' "$bare") <(sort -u <<<"$shorts"))
+    [[ -z "$missing" ]] && return 0
+    while IFS= read -r coord; do
+        [[ -z "$coord" ]] && continue
+        printf 'vise: doctor: dead shorthand: %s has no ":" and is not a mise registry shorthand\n' "$coord"
+    done <<<"$missing"
+    return 1
+}
+
+# `unavailable:` means "Mason lists it, mise has no backend" as of the last
+# sync. If mise's registry now has a shorthand for that exact name, the
+# exclusion is stale and the row is installable after all.
+vise::doctor_wrongly_excluded() {
+    local catalog="$1" shorts="$2" names hits name
+    names=$(awk -F'\t' '!/^[[:space:]]*(#|$)/ && $1 ~ /^unavailable:/ {print $2}' "$catalog" | sort -u)
+    [[ -z "$names" ]] && return 0
+    hits=$(comm -12 <(printf '%s\n' "$names") <(sort -u <<<"$shorts"))
+    [[ -z "$hits" ]] && return 0
+    while IFS= read -r name; do
+        [[ -z "$name" ]] && continue
+        printf 'vise: doctor: wrongly excluded: %s is marked unavailable but mise has a shorthand for it\n' "$name"
+    done <<<"$hits"
+    return 1
+}
+
+# vise::sync merges catalog-overrides.tsv onto the Mason-derived base by
+# name (see vise::sync's awk block). An override whose name matches nothing
+# there becomes a synthetic row instead of a merge: coordinate/kind/language
+# from the override, but homepage and description both stamped "-" (its
+# END block). That shape — override's own coord/kind/lang paired with
+# "-"/"-" in homepage/description — is the only offline signal a dead
+# override leaves behind.
+#
+# That shape alone is not a bug: catalog-overrides.tsv deliberately adds
+# tools Mason never lists (npm:eslint, npm:typescript, pipx:clang-tidy today),
+# and every one of those is a synthetic row by design. The actual bug is an
+# override's coordinate forking a row some OTHER line already owns — so a
+# synthetic row is only flagged when its coordinate is not unique in the
+# catalog; a genuinely new coordinate is silent. Needs a full pass over the
+# catalog before any row can be judged (a coordinate's other occurrences may
+# be on either side of it), hence the two-pass buffer-then-decide shape below
+# instead of deciding inline per line.
+vise::doctor_dead_override() {
+    local catalog="$1" overrides="$2"
+    [[ -r "$overrides" ]] || return 0
+    awk -F'\t' -v overrides="$overrides" '
+        BEGIN {
+            while ((getline line < overrides) > 0) {
+                if (line ~ /^[[:space:]]*(#|$)/) continue
+                split(line, f, "\t")
+                if (f[2] == "") continue
+                coord[f[2]] = f[1]; kind[f[2]] = f[3]; lang[f[2]] = f[4]
+            }
+        }
+        !/^[[:space:]]*(#|$)/ {
+            seen[$1]++
+            if ($2 in coord && $1 == coord[$2] && $3 == kind[$2] && $4 == lang[$2] &&
+                $5 == "-" && $8 == "-") {
+                cand_n++
+                cand_name[cand_n] = $2; cand_coord[cand_n] = $1
+            }
+        }
+        END {
+            bad = 0
+            for (k = 1; k <= cand_n; k++) {
+                if (seen[cand_coord[k]] > 1) {
+                    printf "vise: doctor: dead override: %s (%s) forks an existing row sharing its coordinate\n", \
+                        cand_name[k], cand_coord[k]
+                    bad = 1
+                }
+            }
+            exit bad
+        }
+    ' "$catalog"
+}
+
+# A grab-bag of shapes that have broken a coordinate before: a literal %40
+# (an @ that never got url-decoded), stray whitespace, a doubled or
+# leading/trailing colon, a version PURL-parsing forgot to strip, and a
+# github: coordinate that isn't exactly owner/repo. An npm scope's own
+# leading "@" (npm:@angular/language-server) is not this bug — only an "@"
+# AFTER the identifier, followed by something version-shaped, is.
+vise::doctor_coord_syntax() {
+    local catalog="$1"
+    awk -F'\t' '
+        !/^[[:space:]]*(#|$)/ {
+            c = $1
+            if (index(c, "%40") > 0) {
+                printf "vise: doctor: coord syntax: %s contains a literal %%40\n", c; bad = 1
+            }
+            if (c ~ /[ \t]/) {
+                printf "vise: doctor: coord syntax: %s contains whitespace\n", c; bad = 1
+            }
+            if (index(c, "::") > 0) {
+                printf "vise: doctor: coord syntax: %s contains a double colon\n", c; bad = 1
+            }
+            if (c ~ /^:/ || c ~ /:$/) {
+                printf "vise: doctor: coord syntax: %s has a leading or trailing colon\n", c; bad = 1
+            }
+            rest = c
+            sub(/^[^:]*:/, "", rest)
+            if (rest ~ /@/ && substr(rest, 1, 1) != "@") {
+                n = split(rest, parts, "@")
+                if (parts[n] ~ /^v?[0-9]/) {
+                    printf "vise: doctor: coord syntax: %s has a leftover @version suffix\n", c; bad = 1
+                }
+            }
+            if (c ~ /^github:/) {
+                gh = c
+                sub(/^github:/, "", gh)
+                if (split(gh, gp, "/") != 2) {
+                    printf "vise: doctor: coord syntax: %s is a github: coordinate without exactly one slash\n", c; bad = 1
+                }
+            }
+        }
+        END { exit bad }
+    ' "$catalog"
+}
+
+# $3 is a comma-split list (a tool can be both an lsp and a linter); every
+# member must be one of the three kinds the picker's tooling-only filter
+# understands (vise::render's $filter_mode), or that row silently vanishes
+# from the default view instead of erroring.
+vise::doctor_kind_domain() {
+    local catalog="$1"
+    awk -F'\t' '
+        !/^[[:space:]]*(#|$)/ {
+            n = split($3, ks, ",")
+            for (i = 1; i <= n; i++) {
+                k = ks[i]
+                if (k != "lsp" && k != "linter" && k != "formatter") {
+                    printf "vise: doctor: kind domain: %s has invalid kind %s (row: %s)\n", $1, k, $3
+                    bad = 1
+                }
+            }
+        }
+        END { exit bad }
+    ' "$catalog"
+}
+
+# Stars ($6) and updated ($7) are either "-" (no data, the honest default)
+# or the shape vise::sync_body's GitHub enrichment writes: a plain integer
+# and an ISO date. Anything else means a future producer wrote something
+# vise::render's padding/display code was never built to expect.
+vise::doctor_field_shape() {
+    local catalog="$1"
+    awk -F'\t' '
+        !/^[[:space:]]*(#|$)/ {
+            if ($6 != "-" && $6 !~ /^[0-9]+$/) {
+                printf "vise: doctor: field shape: %s has malformed stars %s\n", $1, $6; bad = 1
+            }
+            if ($7 != "-" && $7 !~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/) {
+                printf "vise: doctor: field shape: %s has malformed updated date %s\n", $1, $7; bad = 1
+            }
+        }
+        END { exit bad }
+    ' "$catalog"
+}
+
+vise::doctor() {
+    local catalog="$CATALOG_FILE" rc=0
+    if [[ ! -r "$catalog" ]]; then
+        printf 'vise: doctor: no catalog at %s\n' "$catalog" >&2
+        return 1
+    fi
+
+    local registry_json shorts
+    if [[ -n "${VISE_REGISTRY_JSON:-}" ]]; then
+        registry_json=$(cat "$VISE_REGISTRY_JSON")
+    else
+        registry_json=$(mise registry --json)
+    fi
+    shorts=$(jq -r '.[].short' <<<"$registry_json" | sort -u)
+
+    vise::doctor_columns "$catalog" || rc=1
+    vise::doctor_empty_fields "$catalog" || rc=1
+    vise::doctor_dup_coord "$catalog" || rc=1
+    vise::doctor_dup_name "$catalog" || rc=1
+    vise::doctor_dead_shorthand "$catalog" "$shorts" || rc=1
+    vise::doctor_wrongly_excluded "$catalog" "$shorts" || rc=1
+    vise::doctor_dead_override "$catalog" "$OVERRIDES_FILE" || rc=1
+    vise::doctor_coord_syntax "$catalog" || rc=1
+    vise::doctor_kind_domain "$catalog" || rc=1
+    vise::doctor_field_shape "$catalog" || rc=1
+
+    return "$rc"
+}
+
+# fzf's execute() runs its command via "$SHELL -c" (see COMMAND EXECUTION in
+# fzf(1)), so the pause can't be inlined as a bare `read -r -p` in the bind
+# string: under a zsh login shell, zsh's `read -p` means "read from a
+# coprocess", not "print a prompt", and errors out instead of blocking —
+# regardless of what $SHELL happens to be, __pause is a real vise subcommand
+# and always runs under THIS script's own bash. `</dev/tty` matters
+# independently of that: execute()'s child still inherits fzf's OWN stdin —
+# the pipe vise::render was piped through, already at EOF — so an
+# unredirected read would return instantly even under bash.
+vise::pause() {
+    echo
+    read -r -p "Press enter to continue..." _dummy </dev/tty
+}
+
+vise::tui() {
+    local self_q
+    self_q=${SELF@Q}
+
+    # execute() switches to the alt screen and switches straight back once the
+    # command exits, so a mise error would flash and vanish without this pause.
+    local pause="; ${self_q} __pause"
+
+    # ctrl-a's toggle state lives in this file (see vise::toggle_filter):
+    # fzf binds run in fresh subshells and can't mutate this process's
+    # environment, but they all inherit VISE_STATE and can read/write the
+    # file it points at.
+    local state_dir
+    state_dir=$(mktemp -d)
+    trap 'rm -rf "$state_dir"' EXIT
+
+    # fzf owns the screen; anything on stderr would corrupt it. Keep the log
+    # outside the temp dir so it survives the trap and can be read afterwards.
+    if [[ "$VISE_VERBOSE" == "1" && -z "${VISE_LOG_FILE:-}" ]]; then
+        VISE_LOG_FILE="${TMPDIR:-/tmp}/vise-$$.log"
+        export VISE_LOG_FILE
+        : >"$VISE_LOG_FILE"
+        printf 'vise: logging to %s\n' "$VISE_LOG_FILE" >&2
+    fi
+    VISE_STATE="$state_dir/filter"
+    export VISE_STATE
+    # Must agree with vise::filter_mode's own fallback, or the prompt and the
+    # renderer would start disagreeing about which mode is active.
+    echo "${VISE_FILTER:-tooling}" >"$VISE_STATE"
+    VISE_SCOPE_STATE="$state_dir/scope"
+    export VISE_SCOPE_STATE
+    echo "${VISE_SCOPE:-all}" >"$VISE_SCOPE_STATE"
+
+    local bind_global="ctrl-g:execute(${self_q} __use-global {+1}${pause})+reload(${self_q} __render)"
+    local bind_project="ctrl-t:execute(${self_q} __use-project {+1}${pause})+reload(${self_q} __render)"
+    local bind_remove="ctrl-x:execute(${self_q} __rm {+1}${pause})+reload(${self_q} __render)"
+    local bind_upgrade="ctrl-u:execute(${self_q} __upgrade {+1}${pause})+reload(${self_q} __render)"
+    local bind_reload="ctrl-r:reload(${self_q} __render)"
+    local bind_filter_toggle="ctrl-a:execute-silent(${self_q} __toggle-filter)+reload(${self_q} __render)+transform-prompt(${self_q} __prompt)"
+    local bind_open="ctrl-o:execute-silent(${self_q} __open {8})"
+    local bind_scope_cycle="ctrl-s:execute-silent(${self_q} __cycle-scope)+reload(${self_q} __render)+transform-prompt(${self_q} __prompt)"
+
+    # --layout=reverse is not cosmetic: fzf's *default* layout (prompt at the
+    # bottom, list growing upward) ships with tab bound to toggle+down, and
+    # "down" in that layout's default keymap does not advance to the next
+    # candidate — two Tabs toggle the SAME row on then off instead of
+    # selecting two different rows, so tab multi-select is silently
+    # nonfunctional without this flag. Confirmed directly against bare fzf
+    # (no vise involved): identical binary and version, --layout=reverse
+    # is the only variable that changes the outcome. Also fixes __prompt's
+    # line landing at the top of the pane, which every ctrl-a/ctrl-s pty
+    # assertion assumes when it reads `capture-pane | head -1`.
+    vise::render | fzf \
+        --delimiter=$'\t' \
+        --with-nth=3..6 \
+        --tiebreak=index \
+        --multi \
+        --ansi \
+        --height=100% \
+        --layout=reverse \
+        --preview="${self_q} __preview {1} {2} {3} {4} {5} {6} {7} {8} {9} {10}" \
+        --preview-window="${VISE_PREVIEW_POS:-down},45%,border-top" \
+        --footer='ctrl-g:use-global  ctrl-t:use-project  ctrl-x:remove  ctrl-u:upgrade  ctrl-s:scope(all/global/project)  ctrl-a:toggle(tooling/all)  ctrl-o:open-url  ctrl-r:reload' \
+        --footer-border=line \
+        --prompt="$(vise::prompt)" \
+        --bind="$bind_global" \
+        --bind="$bind_project" \
+        --bind="$bind_remove" \
+        --bind="$bind_upgrade" \
+        --bind="$bind_reload" \
+        --bind="$bind_filter_toggle" \
+        --bind="$bind_scope_cycle" \
+        --bind="$bind_open"
+}
+
+# Global flags are accepted before or after the command. Parsing stops dead at
+# an internal __command: its arguments are catalog values (descriptions, URLs)
+# that can begin with a dash and must reach the handler untouched.
+CMD=""
+ARGS=()
+while (($#)); do
+    case "$1" in
+    -v | --v | --verbose)
+        VISE_VERBOSE=1
+        shift
+        ;;
+    -vv | --debug)
+        VISE_VERBOSE=1
+        VISE_DEBUG=1
+        shift
+        ;;
+    -h | --help | help)
+        CMD="help"
+        shift
+        ;;
+    -l | --list)
+        [[ -n "$CMD" ]] || CMD="list"
+        shift
+        ;;
+    -s | --sync)
+        [[ -n "$CMD" ]] || CMD="sync"
+        shift
+        ;;
+    __*)
+        CMD="$1"
+        shift
+        ARGS=("$@")
+        break
+        ;;
+    *)
+        if [[ -z "$CMD" ]]; then CMD="$1"; else ARGS+=("$1"); fi
+        shift
+        ;;
+    esac
+done
+export VISE_VERBOSE VISE_DEBUG
+
+case "$CMD" in
+"")
+    vise::tui
+    ;;
+list)
+    vise::list
+    ;;
+sync)
+    vise::sync "${ARGS[0]:-}"
+    ;;
+doctor)
+    vise::doctor
+    ;;
+help)
+    vise::usage
+    ;;
+__render)
+    vise::render "${ARGS[0]:-}" "${ARGS[1]:-}"
+    ;;
+__preview)
+    vise::preview "${ARGS[@]}"
+    ;;
+__open)
+    vise::open_url "${ARGS[0]:-}"
+    ;;
+__toggle-filter)
+    vise::toggle_filter
+    ;;
+__cycle-scope)
+    vise::cycle_scope
+    ;;
+__pause)
+    vise::pause
+    ;;
+__prompt)
+    vise::prompt
+    ;;
+__use-global)
+    vise::use_global "${ARGS[@]}"
+    ;;
+__use-project)
+    vise::use_project "${ARGS[@]}"
+    ;;
+__upgrade)
+    vise::upgrade "${ARGS[@]}"
+    ;;
+__rm)
+    vise::rm "${ARGS[@]}"
+    ;;
+# Internal/unstable: exists so the smoke tests can drive vise::write_atomic
+# without a real sync. First arg is <dest>, the rest is the producer command.
+__write-atomic)
+    vise::write_atomic "${ARGS[@]}"
+    ;;
+# Internal/unstable: exists so the smoke tests can drive vise::merge_overrides
+# without a real sync (no Mason/GitHub fetch). First arg is <base.tsv>,
+# second is <overrides.tsv>.
+__merge-overrides)
+    vise::merge_overrides "${ARGS[@]}"
+    ;;
+*)
+    printf 'vise: unknown command: %s\n\n' "$CMD" >&2
+    vise::usage >&2
+    exit 1
+    ;;
+esac

@@ -1,0 +1,47 @@
+name: e2e
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pty:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # execute() runs its command via "$SHELL -c" (fzf(1), COMMAND EXECUTION)
+        # — the pause bug fixed in 90acac4 was zsh-specific (zsh's `read -p`
+        # means "read from a coprocess", not "print a prompt"), so both
+        # shells actually in use need their own run, not just bash's.
+        shell: ["/bin/bash", "/usr/bin/zsh"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # zsh only: it's a login shell the matrix drives at /usr/bin/zsh, not a
+      # project tool mise manages. tmux and fzf come from mise below instead
+      # of apt — Ubuntu's apt fzf lags Homebrew (what this repo develops
+      # against) by dozens of releases and doesn't support --footer at all,
+      # which vise::tui depends on. Pinning via mise.toml, like shfmt and
+      # shellcheck, makes CI drive the exact fzf/tmux this was built against.
+      - name: Install zsh
+        run: sudo apt-get update && sudo apt-get install -y zsh
+
+      # export_path defaults to true: mise's PATH entries land in
+      # GITHUB_PATH here, so the pinned fzf/tmux are already on PATH by the
+      # time the PTY suite step below runs.
+      - name: Provision pinned tools
+        uses: jdx/mise-action@v4
+        with:
+          install: true
+
+      - name: PTY suite (SHELL=${{ matrix.shell }})
+        env:
+          SHELL: ${{ matrix.shell }}
+        run: mise run test-pty

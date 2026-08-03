@@ -2,6 +2,12 @@
 shfmt = "3.13.1"
 shellcheck = "0.11.0"
 lefthook = "2.1.10"
+# Pinned (not left to apt) so the pty suite drives the SAME fzf/tmux in CI as
+# on a dev machine. Ubuntu's apt fzf lags dev-machine Homebrew by ~30 minor
+# releases and doesn't understand --footer/--footer-border at all — vise::tui
+# depends on that flag, so "whatever apt has" was never a sound contract.
+"aqua:junegunn/fzf" = "0.74.2"
+"aqua:tmux/tmux-builds" = "3.7b"
 
 # Shell scripts are found by shfmt itself (shebang + *.sh), never hand-listed, so
 # a new tool needs no wiring here. bin/ holds only PATH symlinks to entrypoints —
@@ -31,7 +37,7 @@ printf '%s\n' "$files" | {
 '''
 
 [tasks.test]
-description = "Run every *.smoke.sh with bash"
+description = "Run every *.smoke.sh with bash, plus vise doctor's offline catalog lint"
 run = '''
 find . -name '*.smoke.sh' -not -path './.git/*' -not -path './bin/*' -print | sort | {
 	rc=0
@@ -44,4 +50,18 @@ find . -name '*.smoke.sh' -not -path './.git/*' -not -path './bin/*' -print | so
 	[ "$found" -eq 1 ] || echo "no smoke tests found"
 	exit "$rc"
 }
+smoke_rc=$?
+
+echo "== vise doctor =="
+bash vise/vise doctor
+doctor_rc=$?
+
+[ "$smoke_rc" -eq 0 ] && [ "$doctor_rc" -eq 0 ]
 '''
+
+# Not part of [tasks.test]: starts a real fzf inside a real tmux pty per case,
+# an order of magnitude slower than the hermetic suite above and dependent on
+# tmux/fzf being installed. Opt in explicitly with `mise run test-pty`.
+[tasks.test-pty]
+description = "Drive vise's fzf key bindings through a real pty (tmux). Slower, needs tmux+fzf; not run by `mise run test`."
+run = "bash vise/vise.pty.sh"

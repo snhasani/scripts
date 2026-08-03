@@ -1,0 +1,116 @@
+# coordinate	name	kind	language
+# All coordinates verified against `mise registry` (shorthand membership) and
+# `mise ls-remote <coordinate>` (resolves versions) on 2026-08-02.
+
+# Go
+gofumpt	gofumpt	formatter	go
+go:github.com/incu6us/goimports-reviser/v3	goimports-reviser	formatter	go
+golangci-lint	golangci-lint	linter	go
+go:golang.org/x/tools/gopls	gopls	lsp	go
+
+# Lua
+lua-language-server	lua-language-server	lsp	lua
+stylua	stylua	lsp,formatter	lua
+
+# Shell / Bash
+npm:bash-language-server	bash-language-server	lsp	bash
+shellcheck	shellcheck	linter	bash
+shfmt	shfmt	formatter	bash
+
+# Web: JavaScript / TypeScript / HTML / CSS / JSON
+biome	biome	lsp,linter,formatter	javascript,typescript,json
+npm:eslint	eslint	linter	javascript,typescript
+prettier	prettier	formatter	javascript,typescript,css,html,json,yaml,markdown
+npm:@prisma/language-server	prisma-language-server	lsp	prisma
+npm:stylelint	stylelint	linter	css
+npm:svelte-language-server	svelte-language-server	lsp	svelte
+npm:@tailwindcss/language-server	tailwindcss-language-server	lsp	css
+npm:typescript	typescript	lsp	typescript,javascript
+npm:vscode-langservers-extracted	vscode-langservers-extracted	lsp	html,css,json
+npm:@vue/language-server	vue-language-server	lsp	vue
+
+# Python
+npm:basedpyright	basedpyright	lsp	python
+black	black	formatter	python
+pipx:isort	isort	formatter	python
+pipx:mypy	mypy	linter	python
+github:facebook/pyrefly	pyrefly	lsp,linter	python
+npm:pyright	pyright	lsp	python
+ruff	ruff	lsp,linter,formatter	python
+ty	ty	lsp,linter	python
+
+# TOML
+aqua:tamasfe/taplo	taplo	lsp,formatter	toml
+
+# Terraform
+aqua:hashicorp/terraform-ls	terraform-ls	lsp	terraform
+tflint	tflint	lsp,linter	terraform
+
+# Zig
+aqua:zigtools/zls	zls	lsp	zig
+
+# Markdown
+aqua:Feel-ix-343/markdown-oxide	markdown-oxide	lsp	markdown
+markdownlint-cli2	markdownlint-cli2	linter,formatter	markdown
+marksman	marksman	lsp	markdown
+
+# C / C++
+pipx:clang-format	clang-format	formatter	c,cpp
+pipx:clang-tidy	clang-tidy	linter	c,cpp
+github:clangd/clangd	clangd	lsp	c,cpp
+
+# Clojure
+clj-kondo	clj-kondo	linter	clojure,clojurescript
+github:clojure-lsp/clojure-lsp	clojure-lsp	lsp	clojure,clojurescript
+
+# Protobuf
+buf	buf	lsp,linter,formatter	protobuf
+
+# Rust
+rust-analyzer	rust-analyzer	lsp	rust
+
+# YAML
+npm:yaml-language-server	yaml-language-server	lsp	yaml
+yamlfmt	yamlfmt	formatter	yaml
+yamllint	yamllint	linter	yaml
+
+# CI / GitHub Actions
+actionlint	actionlint	linter	github-actions
+
+# Docker
+npm:dockerfile-language-server-nodejs	dockerfile-language-server	lsp	docker
+hadolint	hadolint	linter	docker
+
+# SQL
+pipx:sqlfluff	sqlfluff	linter,formatter	sql
+
+# Nix
+github:kamadorueda/alejandra	alejandra	formatter	nix
+github:oxalica/nil	nil	lsp	nix
+
+# Ruby
+gem:rubocop	rubocop	lsp,linter,formatter	ruby
+gem:solargraph	solargraph	lsp	ruby
+
+# PHP
+npm:intelephense	intelephense	lsp	php
+
+# JVM: Java / Kotlin
+github:eclipse-jdtls/eclipse.jdt.ls	jdtls	lsp	java
+github:fwcd/kotlin-language-server	kotlin-language-server	lsp	kotlin
+
+# .NET / C#
+dotnet:csharp-ls	csharp-ls	lsp	csharp
+github:OmniSharp/omnisharp-roslyn	omnisharp	lsp	csharp
+
+# Swift
+swiftformat	swiftformat	formatter	swift
+swiftlint	swiftlint	linter	swift
+
+# Helm
+helm-ls	helm-ls	lsp	helm
+
+# Cross-language / prose
+pipx:codespell	codespell	linter	any
+harper-ls	harper-ls	lsp	any
+typos	typos	linter	any

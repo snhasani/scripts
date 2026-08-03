@@ -12,26 +12,26 @@ set -uo pipefail
 
 WATCHER="${1:-$(cd "$(dirname "$0")" && pwd)/macos-appearance-watcher}"
 [ -f "$WATCHER" ] || {
-	printf 'macos-appearance-watcher not found at %s\n' "$WATCHER" >&2
-	exit 2
+    printf 'macos-appearance-watcher not found at %s\n' "$WATCHER" >&2
+    exit 2
 }
 
 pass=0
 fail=0
 ok() {
-	printf '  \033[32mok\033[0m   %s\n' "$1"
-	pass=$((pass + 1))
+    printf '  \033[32mok\033[0m   %s\n' "$1"
+    pass=$((pass + 1))
 }
 bad() {
-	printf '  \033[31mFAIL\033[0m %s\n' "$1"
-	[ $# -ge 2 ] && printf '       got: %s\n' "$2"
-	fail=$((fail + 1))
+    printf '  \033[31mFAIL\033[0m %s\n' "$1"
+    [ $# -ge 2 ] && printf '       got: %s\n' "$2"
+    fail=$((fail + 1))
 }
 
 base="${TMPDIR:-/tmp}/macos-appearance-watcher-smoke.$$"
 mkdir -p "$base" || {
-	printf 'cannot create throwaway dir %s\n' "$base" >&2
-	exit 2
+    printf 'cannot create throwaway dir %s\n' "$base" >&2
+    exit 2
 }
 trap 'rm -rf "$base"' EXIT
 
@@ -47,34 +47,34 @@ run() { XDG_STATE_HOME="$base/state" "$WATCHER" "$@"; }
 run light >/dev/null
 got=$(cat "$base/state/appearance/mode" 2>/dev/null)
 if [ "$got" = "Light" ]; then
-	ok "light -> Light"
+    ok "light -> Light"
 else
-	bad "light -> Light" "$got"
+    bad "light -> Light" "$got"
 fi
 
 # 2. "dark" resolves to Dark
 run dark >/dev/null
 got=$(cat "$base/state/appearance/mode" 2>/dev/null)
 if [ "$got" = "Dark" ]; then
-	ok "dark -> Dark"
+    ok "dark -> Dark"
 else
-	bad "dark -> Dark" "$got"
+    bad "dark -> Dark" "$got"
 fi
 
 # 3. anything else defaults to Dark (only "light" flips it)
 run bogus >/dev/null
 got=$(cat "$base/state/appearance/mode" 2>/dev/null)
 if [ "$got" = "Dark" ]; then
-	ok "unrecognized mode defaults to Dark"
+    ok "unrecognized mode defaults to Dark"
 else
-	bad "unrecognized mode defaults to Dark" "$got"
+    bad "unrecognized mode defaults to Dark" "$got"
 fi
 
 # 4. no leftover .tmp file after a run (atomic write via rename)
 if [ -e "$base/state/appearance/mode.tmp" ]; then
-	bad "no leftover mode.tmp after write" "still present"
+    bad "no leftover mode.tmp after write" "still present"
 else
-	ok "no leftover mode.tmp after write"
+    ok "no leftover mode.tmp after write"
 fi
 
 # 5. --check exits 0 and reports both dependencies when they're actually installed
@@ -85,10 +85,10 @@ case "$out" in
 *) bad "--check reports dark-notify status" "$out" ;;
 esac
 if [ $rc -eq 0 ]; then
-	ok "--check exits 0 (dark-notify + tmux both found)"
+    ok "--check exits 0 (dark-notify + tmux both found)"
 else
-	printf '  \033[33mskip\033[0m --check exited %d - a dependency is missing on this machine\n' "$rc"
-	printf '%s\n' "$out" | sed 's/^/       /'
+    printf '  \033[33mskip\033[0m --check exited %d - a dependency is missing on this machine\n' "$rc"
+    printf '%s\n' "$out" | sed 's/^/       /'
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

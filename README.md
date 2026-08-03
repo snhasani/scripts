@@ -13,7 +13,10 @@ bin/            # on PATH — relative symlinks to entrypoints only
 
 ## Tools
 
+- **macos-appearance-watcher** — keep tmux synced with macOS light/dark appearance, live.
+- **rig** — bootstrap a repo with the per-repo config the agent skills read.
 - **sancla** — launch Claude Code with secret-looking env vars stripped.
+- **vise** — Mason-like fzf picker over mise-managed LSPs, linters and formatters.
 
 ## Install
 
