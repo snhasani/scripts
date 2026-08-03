@@ -996,5 +996,25 @@ else
     bad "doctor: kind domain catches a kind outside lsp/linter/formatter" "rc=$rc out=[$out]"
 fi
 
+# 10. field shape: stars ($6) is numeric-or-"-"; updated ($7) is
+# YYYY-MM-DD-or-"-". A clean row with real stars/date is the control.
+SHAPE_CATALOG="$(mktemp -d "$DOCTOR_DIR/shape.XXXXXX")/catalog.tsv"
+cat >"$SHAPE_CATALOG" <<'EOF'
+npm:shape-ok	shape-ok	linter	javascript	https://example.com/ok	42	2026-01-01	Fine
+npm:bad-stars	bad-stars	linter	javascript	-	not-a-number	-	Bad stars
+npm:bad-date	bad-date	linter	javascript	-	-	01/01/2026	Bad date
+EOF
+out=$(VISE_CATALOG="$SHAPE_CATALOG" VISE_REGISTRY_JSON="$DOCTOR_EMPTY_REGISTRY" \
+    VISE_OVERRIDES="$DOCTOR_EMPTY_OVERRIDES" bash "$VISE" doctor 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q 'field shape' &&
+    printf '%s\n' "$out" | grep -q 'bad-stars' &&
+    printf '%s\n' "$out" | grep -q 'bad-date' &&
+    ! printf '%s\n' "$out" | grep -q 'shape-ok'; then
+    ok "doctor: field shape catches malformed stars and updated-date columns"
+else
+    bad "doctor: field shape catches malformed stars and updated-date columns" "rc=$rc out=[$out]"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

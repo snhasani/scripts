@@ -981,6 +981,25 @@ vise::doctor_kind_domain() {
     ' "$catalog"
 }
 
+# Stars ($6) and updated ($7) are either "-" (no data, the honest default)
+# or the shape vise::sync_body's GitHub enrichment writes: a plain integer
+# and an ISO date. Anything else means a future producer wrote something
+# vise::render's padding/display code was never built to expect.
+vise::doctor_field_shape() {
+    local catalog="$1"
+    awk -F'\t' '
+        !/^[[:space:]]*(#|$)/ {
+            if ($6 != "-" && $6 !~ /^[0-9]+$/) {
+                printf "vise: doctor: field shape: %s has malformed stars %s\n", $1, $6; bad = 1
+            }
+            if ($7 != "-" && $7 !~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/) {
+                printf "vise: doctor: field shape: %s has malformed updated date %s\n", $1, $7; bad = 1
+            }
+        }
+        END { exit bad }
+    ' "$catalog"
+}
+
 vise::doctor() {
     local catalog="$CATALOG_FILE" rc=0
     if [[ ! -r "$catalog" ]]; then
@@ -1005,6 +1024,7 @@ vise::doctor() {
     vise::doctor_dead_override "$catalog" "$OVERRIDES_FILE" || rc=1
     vise::doctor_coord_syntax "$catalog" || rc=1
     vise::doctor_kind_domain "$catalog" || rc=1
+    vise::doctor_field_shape "$catalog" || rc=1
 
     return "$rc"
 }
