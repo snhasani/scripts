@@ -21,62 +21,42 @@
 # install/remove tools on the machine running this suite without it.
 #
 # ============================================================================
-# COVERAGE: what's here, what's not, and why
+# COVERAGE: what's here, what's not yet, and why
 # ============================================================================
 # Covered, each with a killed mutant (see the case-by-case comments below):
 #   ctrl-a  execute-silent(__toggle-filter)+reload+transform-prompt
 #   ctrl-s  execute-silent(__cycle-scope)+reload+transform-prompt
 #   ctrl-o  execute-silent(__open {8})
 #   ctrl-r  reload(__render)
+#   ctrl-g  execute(__use-global {+1}; __pause)+reload(__render)
 #
-# NOT covered, and not fakeable: ctrl-g, ctrl-t, ctrl-x, ctrl-u. All four
-# share one shape neither of the four above has —
+# ctrl-g was undriveable here for a real reason, now fixed rather than worked
+# around. Its execute() ends in a pause meant to hold mise's output on
+# screen:
 #   execute(<cmd> {+1}; echo; read -r -p "Press enter to continue..." _dummy)+reload(...)
-# — an execute() (not -silent) with a blocking read chained before the
-# reload. Extensive isolation (see below) found that with VISE_DRY_RUN=1,
-# vise::mutate's whole DRY-run path is a single printf with no subprocess —
-# so fast that the entire cycle (leave the alt screen, print "DRY: ...",
-# hit the read, come back, reload the list) can complete faster than tmux's
-# OWN pty parser produces an externally observable intermediate frame. This
-# is not "flaky" in the TST-19 sense (flaky = sometimes red, sometimes green
-# on identical conditions) — it is deterministic: 0 hits across 300 samples
-# at 5ms resolution, 0 hits waiting up to 10 full seconds, 0 fzf child
-# processes ever observed via `ps` at any sampling point, every single time,
-# across dozens of trials. Compare: the SAME instrumentation reliably caught
-# ctrl-a/ctrl-s/ctrl-o every time, because those bindings' effects (a prompt
-# that stays changed, a row that stays hidden, a file a stub `open` wrote)
-# persist past the keypress instead of being overwritten by the very next
-# reload. Confirmed independently: when the mutating call is NOT dry-run
-# (mise actually forks and spends real wall-clock time failing to resolve a
-# fake coordinate), the exact same execute()+read+reload sequence WAS
-# observable — the slow path gave capture-pane a real window to land in.
-# Swapping in a slow stub `mise` to manufacture that window was considered
-# and rejected: it would mean dropping VISE_DRY_RUN=1 for part of a run,
-# which the safety rules for this task rule out categorically.
+# Two independent bugs made the pause never pause, so the whole execute()+
+# reload() cycle finished in the same instant it started, with nothing to
+# ever land a capture-pane on:
 #
-# One more data point worth recording: the same "read -r -p" pause, run as
-# the ONLY thing inside execute() (no preceding call into vise/vise), was
-# observed to block correctly and reliably in this same tmux+fzf setup. It
-# stopped blocking specifically once a call into vise/vise itself preceded
-# it in the same execute() clause — reproduced with __prompt (nothing to do
-# with mise) as the preceding call, not just __use-global. Whether that is a
-# real defect in how the pause behaves for an actual interactive user, or an
-# artifact specific to nested tmux automation, could not be settled from
-# here. Worth a deliberate manual check (a stopwatch, not a glance) on a real
-# terminal: does "Press enter to continue..." genuinely wait, or flash by?
+#   1. fzf runs execute()'s command with "$SHELL -c" (COMMAND EXECUTION in
+#      fzf(1)). Under a zsh login shell, `read -r -p PROMPT VAR` is not "print
+#      a prompt" — zsh's `-p` means "read from a coprocess" and errors
+#      immediately ("no coprocess"), regardless of stdin. Confirmed directly:
+#      `zsh -c 'read -r -p "x" v'` in a real pty errors and returns instantly;
+#      the identical bash -c invocation blocks correctly.
+#   2. Independently of (1): execute()'s child inherits fzf's OWN stdin, which
+#      vise::render's pipe into fzf already left at EOF, so even under bash a
+#      plain `read` with no redirect returns instantly too.
 #
-# What is NOT missing despite this gap:
-#   - Every __* handler (__use_global, __use_project, __rm, __upgrade) has
-#     direct coverage in vise.smoke.sh, including the exact empty-argument
-#     shape {+1} produces on a zero-match filter (vise.smoke.sh's "empty
-#     upgrade refuses" case calls `__upgrade` with zero args — precisely
-#     what {+1} yields when nothing matches and nothing is tab-selected).
-#   - fzf's OWN {+1}/{+}/{1}/{8} placeholder-substitution and --bind
-#     dispatch mechanism is not per-key special-cased inside fzf; the
-#     ctrl-o case below exercises the exact same substitution engine
-#     (verified live, with a killed {8}->{1} mutant) that ctrl-g/t/x/u's
-#     {+1} relies on. So the MECHANISM is exercised end-to-end here even
-#     though those four specific bindings' own transient output is not.
+# Fixed by routing the pause through vise::pause, dispatched as a real
+# `__pause` subcommand rather than inlined in the bind string: invoking
+# `vise __pause` always execs vise's own bash, sidestepping (1) regardless of
+# $SHELL, and vise::pause's `read ... </dev/tty` fixes (2) by reading the
+# controlling terminal instead of the inherited pipe. See vise::pause's
+# comment in vise for the by-the-numbers version.
+#
+# ctrl-t/ctrl-x/ctrl-u share this exact fix — one $pause variable feeds all
+# four binds — but aren't test-covered yet; that's the next commit.
 #
 # Usage: bash vise.pty.sh [path-to-vise]   (defaults to ./vise beside this file)
 
@@ -179,6 +159,49 @@ wait_for_file() {
         sleep 0.1
     done
     return 0
+}
+
+# Shared by ctrl-g/t/x/u: once the action has fired, the post-action pause is
+# a deterministic sync point — it blocks indefinitely, so "still showing the
+# prompt after a full second with no keypress" is a real assertion, not a
+# race (contrast with polling for something that might merely not have
+# happened YET). Confirms the pause both appears and does not get silently
+# skipped past, then dismisses it and confirms it actually clears.
+assert_pause_then_dismiss() {
+    local session="$1" label="$2"
+    if wait_for "$session" "Press enter to continue" 30; then
+        local stable=1 _try
+        for _try in $(seq 1 10); do
+            sleep 0.1
+            tmux capture-pane -t "$session" -p 2>/dev/null | grep -qF "Press enter to continue" || {
+                stable=0
+                break
+            }
+        done
+        if [ "$stable" -eq 1 ]; then
+            ok "$label: pause blocks and stays visible without a keypress"
+        else
+            bad "$label: pause blocks and stays visible without a keypress" "pause text disappeared before Enter was sent"
+        fi
+    else
+        bad "$label: pause blocks and stays visible without a keypress" "pause text never appeared"
+        return 1
+    fi
+
+    tmux send-keys -t "$session" Enter
+    local dismissed=0 _try2
+    for _try2 in $(seq 1 30); do
+        tmux capture-pane -t "$session" -p 2>/dev/null | grep -qF "Press enter to continue" || {
+            dismissed=1
+            break
+        }
+        sleep 0.1
+    done
+    if [ "$dismissed" -eq 1 ]; then
+        ok "$label: Enter dismisses the pause"
+    else
+        bad "$label: Enter dismisses the pause" "pause text still on screen after Enter"
+    fi
 }
 
 # --- ctrl-a: execute-silent(__toggle-filter)+reload(__render)+transform-prompt --
@@ -406,6 +429,61 @@ if wait_for "$SESSION" "before-reload"; then
     fi
 else
     bad "ctrl-r: picker never rendered the fixture row"
+fi
+end_session "$SESSION"
+
+# --- ctrl-g: execute(__use-global {+1}; __pause)+reload(__render) --------------
+# Regression coverage for the pause that never paused: execute()'s child
+# inherits fzf's OWN stdin, which vise::render's pipe already left at EOF, so
+# an unguarded `read` returned instantly and a mise error would flash off the
+# alt screen unseen. The row is appended to the catalog file AFTER the first
+# render, so "the new row shows up" can only mean +reload(__render) actually
+# ran again once the pause returned, not that execute() merely resumed the
+# already-drawn UI.
+CTRLG_DIR="$BASE/ctrl-g"
+mkdir -p "$CTRLG_DIR"
+cat >"$CTRLG_DIR/catalog.tsv" <<'EOF'
+npm:pause-tool	pause-tool	linter	javascript	-	-	-	-
+EOF
+cat >"$CTRLG_DIR/config.json" <<EOF
+[{"path": "$CTRLG_DIR/global.toml", "tools": []}]
+EOF
+echo '{}' >"$CTRLG_DIR/ls.json"
+echo '[]' >"$CTRLG_DIR/registry.json"
+cat >"$CTRLG_DIR/launch.sh" <<EOF
+#!/bin/bash
+export VISE_DRY_RUN=1
+export VISE_CATALOG="$CTRLG_DIR/catalog.tsv"
+export VISE_CONFIG_JSON="$CTRLG_DIR/config.json"
+export VISE_LS_JSON="$CTRLG_DIR/ls.json"
+export VISE_REGISTRY_JSON="$CTRLG_DIR/registry.json"
+export MISE_GLOBAL_CONFIG_FILE="$CTRLG_DIR/global.toml"
+exec bash "$VISE"
+EOF
+chmod +x "$CTRLG_DIR/launch.sh"
+
+SESSION=$(start_session "$CTRLG_DIR/launch.sh")
+if wait_for "$SESSION" "pause-tool"; then
+    printf 'npm:reloaded-after-pause\treloaded-after-pause\tlinter\tjavascript\t-\t-\t-\t-\n' >>"$CTRLG_DIR/catalog.tsv"
+
+    tmux send-keys -t "$SESSION" C-g
+    if wait_for "$SESSION" "DRY: mise use -g -- npm:pause-tool" 30; then
+        ok "ctrl-g: fires with the right coordinate (DRY: mise use -g -- npm:pause-tool)"
+    else
+        bad "ctrl-g: fires with the right coordinate (DRY: mise use -g -- npm:pause-tool)" \
+            "$(tmux capture-pane -t "$SESSION" -p)"
+    fi
+
+    assert_pause_then_dismiss "$SESSION" "ctrl-g"
+
+    if wait_for "$SESSION" "reloaded-after-pause" 30; then
+        ok "ctrl-g: +reload(__render) re-runs after the pause returns"
+    else
+        bad "ctrl-g: +reload(__render) re-runs after the pause returns" \
+            "$(tmux capture-pane -t "$SESSION" -p)"
+    fi
+else
+    bad "ctrl-g: picker never rendered the fixture row"
 fi
 end_session "$SESSION"
 
