@@ -839,6 +839,21 @@ vise::doctor_dup_coord() {
     return "$rc"
 }
 
+# Regression guard (0 today): two coordinates sharing one name would give
+# the picker's identity join two candidates to collapse onto one row.
+vise::doctor_dup_name() {
+    local catalog="$1" dups name coords rc=0
+    dups=$(awk -F'\t' '!/^[[:space:]]*(#|$)/ {print $2}' "$catalog" | sort | uniq -d)
+    [[ -z "$dups" ]] && return 0
+    while IFS= read -r name; do
+        [[ -z "$name" ]] && continue
+        coords=$(awk -F'\t' -v n="$name" '$2 == n {print $1}' "$catalog" | paste -sd, -)
+        printf 'vise: doctor: duplicate name: %s (%s)\n' "$name" "$coords"
+        rc=1
+    done <<<"$dups"
+    return "$rc"
+}
+
 vise::doctor() {
     local catalog="$CATALOG_FILE" rc=0
     if [[ ! -r "$catalog" ]]; then
@@ -849,6 +864,7 @@ vise::doctor() {
     vise::doctor_columns "$catalog" || rc=1
     vise::doctor_empty_fields "$catalog" || rc=1
     vise::doctor_dup_coord "$catalog" || rc=1
+    vise::doctor_dup_name "$catalog" || rc=1
 
     return "$rc"
 }
