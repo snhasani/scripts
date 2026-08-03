@@ -791,5 +791,32 @@ fi
 # real, verified result. Do not assume the PATH-stripping trick above proves
 # __preview is hermetic too — it isn't, and it doesn't.
 
+# --- vise doctor: offline lint over catalog.tsv --------------------------
+# Every fixture below is self-contained (own catalog, own registry, own
+# overrides) so a check's test can never pass by accident from repo state:
+# a fixture catalog's coordinates never appear in the real catalog-overrides
+# or registry, so unrelated checks are provably inert on any one fixture.
+DOCTOR_DIR="$(mktemp -d "$BASE/doctor.XXXXXX")"
+DOCTOR_EMPTY_REGISTRY="$DOCTOR_DIR/empty-registry.json"
+echo '[]' >"$DOCTOR_EMPTY_REGISTRY"
+DOCTOR_EMPTY_OVERRIDES="$DOCTOR_DIR/empty-overrides.tsv"
+: >"$DOCTOR_EMPTY_OVERRIDES"
+
+# 1. column count: NF != 8 on a data row must be caught and named.
+COL_CATALOG="$(mktemp -d "$DOCTOR_DIR/columns.XXXXXX")/catalog.tsv"
+cat >"$COL_CATALOG" <<'EOF'
+npm:good-tool	good-tool	linter	javascript	https://example.com/good	1	2026-01-01	A good row
+npm:short-row	short-row	linter	javascript
+EOF
+out=$(VISE_CATALOG="$COL_CATALOG" VISE_REGISTRY_JSON="$DOCTOR_EMPTY_REGISTRY" \
+    VISE_OVERRIDES="$DOCTOR_EMPTY_OVERRIDES" bash "$VISE" doctor 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q 'column count' &&
+    printf '%s\n' "$out" | grep -q 'npm:short-row'; then
+    ok "doctor: column count catches a row with the wrong field count"
+else
+    bad "doctor: column count catches a row with the wrong field count" "rc=$rc out=[$out]"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
