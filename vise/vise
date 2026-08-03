@@ -186,21 +186,21 @@ vise::use_global() {
     vise::require_selection "use-global" "$@" || return 1
     local rc=0
     vise::partition_available "$@" || rc=1
-    ((${#VISE_VALID[@]} > 0)) && { vise::mutate mise use -g "${VISE_VALID[@]}" || rc=1; }
+    ((${#VISE_VALID[@]} > 0)) && { vise::mutate mise use -g -- "${VISE_VALID[@]}" || rc=1; }
     return "$rc"
 }
 vise::use_project() {
     vise::require_selection "use-project" "$@" || return 1
     local rc=0
     vise::partition_available "$@" || rc=1
-    ((${#VISE_VALID[@]} > 0)) && { vise::mutate mise use "${VISE_VALID[@]}" || rc=1; }
+    ((${#VISE_VALID[@]} > 0)) && { vise::mutate mise use -- "${VISE_VALID[@]}" || rc=1; }
     return "$rc"
 }
 vise::upgrade() {
     vise::require_selection "upgrade" "$@" || return 1
     local rc=0
     vise::partition_available "$@" || rc=1
-    ((${#VISE_VALID[@]} > 0)) && { vise::mutate mise upgrade "${VISE_VALID[@]}" || rc=1; }
+    ((${#VISE_VALID[@]} > 0)) && { vise::mutate mise upgrade -- "${VISE_VALID[@]}" || rc=1; }
     return "$rc"
 }
 
@@ -223,14 +223,14 @@ vise::rm() {
         coord_rc=0
         case "$scope" in
         both)
-            vise::mutate mise rm -g "$coord" || coord_rc=1
-            vise::mutate mise rm "$coord" || coord_rc=1
+            vise::mutate mise rm -g -- "$coord" || coord_rc=1
+            vise::mutate mise rm -- "$coord" || coord_rc=1
             ;;
         global)
-            vise::mutate mise rm -g "$coord" || coord_rc=1
+            vise::mutate mise rm -g -- "$coord" || coord_rc=1
             ;;
         project)
-            vise::mutate mise rm "$coord" || coord_rc=1
+            vise::mutate mise rm -- "$coord" || coord_rc=1
             ;;
         none)
             printf 'vise: %s is not tracked in any config, skipping\n' "$coord" >&2
@@ -574,7 +574,7 @@ vise::preview() {
     fi
 
     local ls_out
-    ls_out=$(mise ls "$coord" 2>/dev/null || true)
+    ls_out=$(mise ls -- "$coord" 2>/dev/null || true)
     printf '\n%s\n' "$(printf '─%.0s' $(seq 1 "$width"))"
     if [[ -z "$ls_out" ]]; then
         echo "(not installed)"
@@ -601,16 +601,25 @@ vise::mode_of() {
 vise::write_atomic() {
     local dest="$1"
     shift
-    local dir tmp mode=""
+    local dir tmp mode="644"
     dir=$(dirname "$dest")
     tmp=$(mktemp "$dir/.vise-XXXXXX") || return 1
-    [[ -e "$dest" ]] && mode=$(vise::mode_of "$dest")
 
+    # Installed above the mode_of lookup: the right operand of && below is
+    # NOT set -e-exempt, so a failing mode_of would otherwise abort the
+    # function before any trap existed to clean up the temp file.
     # vise::tui already owns an EXIT trap; save and restore it verbatim so
     # our temp-file cleanup adds to it instead of clobbering it.
     local prev_trap
     prev_trap=$(trap -p EXIT)
-    trap 'rm -f "$tmp"' EXIT
+    # $tmp is expanded NOW, not deferred: a local var doesn't survive into the
+    # trap's execution context if set -e tears down this function's frame
+    # abnormally (e.g. mode_of failing below) — a deferred '"'"'$tmp'"'"' would
+    # then hit set -u's unbound-variable error instead of running the cleanup.
+    # shellcheck disable=SC2064 # deliberately eager: see comment above
+    trap "rm -f '$tmp'" EXIT
+
+    [[ -e "$dest" ]] && mode=$(vise::mode_of "$dest")
 
     local ok=1
     if ! "$@" >"$tmp"; then
