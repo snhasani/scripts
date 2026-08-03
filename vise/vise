@@ -960,6 +960,27 @@ vise::doctor_coord_syntax() {
     ' "$catalog"
 }
 
+# $3 is a comma-split list (a tool can be both an lsp and a linter); every
+# member must be one of the three kinds the picker's tooling-only filter
+# understands (vise::render's $filter_mode), or that row silently vanishes
+# from the default view instead of erroring.
+vise::doctor_kind_domain() {
+    local catalog="$1"
+    awk -F'\t' '
+        !/^[[:space:]]*(#|$)/ {
+            n = split($3, ks, ",")
+            for (i = 1; i <= n; i++) {
+                k = ks[i]
+                if (k != "lsp" && k != "linter" && k != "formatter") {
+                    printf "vise: doctor: kind domain: %s has invalid kind %s (row: %s)\n", $1, k, $3
+                    bad = 1
+                }
+            }
+        }
+        END { exit bad }
+    ' "$catalog"
+}
+
 vise::doctor() {
     local catalog="$CATALOG_FILE" rc=0
     if [[ ! -r "$catalog" ]]; then
@@ -983,6 +1004,7 @@ vise::doctor() {
     vise::doctor_wrongly_excluded "$catalog" "$shorts" || rc=1
     vise::doctor_dead_override "$catalog" "$OVERRIDES_FILE" || rc=1
     vise::doctor_coord_syntax "$catalog" || rc=1
+    vise::doctor_kind_domain "$catalog" || rc=1
 
     return "$rc"
 }

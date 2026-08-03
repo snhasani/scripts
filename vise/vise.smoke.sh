@@ -977,5 +977,24 @@ else
         "rc=$rc bad_row_count=$bad_row_count out=[$out]"
 fi
 
+# 9. kind domain: $3 is a comma-split list; every member must be one of
+# lsp/linter/formatter. A multi-kind row (lsp,linter,formatter) is the
+# control — comma-splitting must not itself be mistaken for the bug.
+KIND_CATALOG="$(mktemp -d "$DOCTOR_DIR/kind.XXXXXX")/catalog.tsv"
+cat >"$KIND_CATALOG" <<'EOF'
+npm:multi-kind-ok	multi-kind-ok	lsp,linter,formatter	javascript	-	-	-	-
+npm:bad-kind	bad-kind	linter,runtime	javascript	-	-	-	-
+EOF
+out=$(VISE_CATALOG="$KIND_CATALOG" VISE_REGISTRY_JSON="$DOCTOR_EMPTY_REGISTRY" \
+    VISE_OVERRIDES="$DOCTOR_EMPTY_OVERRIDES" bash "$VISE" doctor 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q 'kind domain' &&
+    printf '%s\n' "$out" | grep -q 'bad-kind' &&
+    ! printf '%s\n' "$out" | grep -q 'multi-kind-ok'; then
+    ok "doctor: kind domain catches a kind outside lsp/linter/formatter"
+else
+    bad "doctor: kind domain catches a kind outside lsp/linter/formatter" "rc=$rc out=[$out]"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
