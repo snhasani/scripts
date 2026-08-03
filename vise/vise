@@ -1291,12 +1291,8 @@ help)
 __render)
     vise::render "${ARGS[0]:-}" "${ARGS[1]:-}"
     ;;
-# ${ARGS[@]+"${ARGS[@]}"} rather than bare "${ARGS[@]}": bash below 4.4
-# expands "${ARR[@]}" on a zero-length array as an unset variable under
-# `set -u`, aborting under macOS's system /bin/bash (3.2). The `+` form
-# short-circuits the expansion entirely when ARGS is empty.
 __preview)
-    vise::preview ${ARGS[@]+"${ARGS[@]}"}
+    vise::preview "${ARGS[@]}"
     ;;
 __open)
     vise::open_url "${ARGS[0]:-}"
@@ -1314,27 +1310,27 @@ __prompt)
     vise::prompt
     ;;
 __use-global)
-    vise::use_global ${ARGS[@]+"${ARGS[@]}"}
+    vise::use_global "${ARGS[@]}"
     ;;
 __use-project)
-    vise::use_project ${ARGS[@]+"${ARGS[@]}"}
+    vise::use_project "${ARGS[@]}"
     ;;
 __upgrade)
-    vise::upgrade ${ARGS[@]+"${ARGS[@]}"}
+    vise::upgrade "${ARGS[@]}"
     ;;
 __rm)
-    vise::rm ${ARGS[@]+"${ARGS[@]}"}
+    vise::rm "${ARGS[@]}"
     ;;
 # Internal/unstable: exists so the smoke tests can drive vise::write_atomic
 # without a real sync. First arg is <dest>, the rest is the producer command.
 __write-atomic)
-    vise::write_atomic ${ARGS[@]+"${ARGS[@]}"}
+    vise::write_atomic "${ARGS[@]}"
     ;;
 # Internal/unstable: exists so the smoke tests can drive vise::merge_overrides
 # without a real sync (no Mason/GitHub fetch). First arg is <base.tsv>,
 # second is <overrides.tsv>.
 __merge-overrides)
-    vise::merge_overrides ${ARGS[@]+"${ARGS[@]}"}
+    vise::merge_overrides "${ARGS[@]}"
     ;;
 *)
     printf 'vise: unknown command: %s\n\n' "$CMD" >&2

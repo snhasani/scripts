@@ -245,6 +245,29 @@ else
     bad "__preview: -- separates flags from a coordinate starting with -" "$(cat "$DASH_PREVIEW_CALLS")"
 fi
 
+# --- a coordinate containing a space survives the CLI dispatch as ONE word ---
+# The top-level arg loop collects "$@" into ARGS, and every __* handler
+# forwards it on to its vise:: function; a bare unquoted ${ARGS[@]} there
+# would word-split "coord with space" into two elements before vise::use_global
+# ever sees it. Argument COUNT is the tell: mise gets 4 argv entries (use, -g,
+# --, the coordinate) if forwarded correctly, 5 if split in two.
+SPACE_STUB_BIN="$(mktemp -d "$BASE/space-stubbin.XXXXXX")"
+SPACE_CALLS="$(mktemp "$BASE/space-calls.XXXXXX")"
+cat >"$SPACE_STUB_BIN/mise" <<EOF
+#!/bin/sh
+printf '%s\n' "\$#" >>'$SPACE_CALLS'
+for a in "\$@"; do printf '<%s>\n' "\$a" >>'$SPACE_CALLS'; done
+exit 0
+EOF
+chmod +x "$SPACE_STUB_BIN/mise"
+(cd "$REPO_ROOT" && PATH="$SPACE_STUB_BIN:$PATH" \
+    bash "$VISE" __use-global "coord with space" >/dev/null 2>&1)
+if [ "$(head -1 "$SPACE_CALLS")" = "4" ] && grep -qxF '<coord with space>' "$SPACE_CALLS"; then
+    ok "CLI dispatch: a coordinate containing a space reaches mise as one argument"
+else
+    bad "CLI dispatch: a coordinate containing a space reaches mise as one argument" "$(cat "$SPACE_CALLS")"
+fi
+
 # --- version floor: bash >= 5 required ---------------------------------------
 # `#!/usr/bin/env bash` resolves to whatever bash sits first on PATH — on a
 # machine that also has an old system bash (macOS ships /bin/bash 3.2.57),
