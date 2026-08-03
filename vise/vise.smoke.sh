@@ -827,6 +827,62 @@ else
     bad "merge seam: a row with no matching override passes through unchanged" "$merge_out"
 fi
 
+# --- override merge: a renaming override must not fork a duplicate ----------
+# The confirmed bug (spec item 3): the merge matches an override to a base
+# row by NAME. An override that RENAMES an existing row — its own coordinate
+# already equals that row's coordinate, but its name differs — finds no name
+# match, so the row passes through untouched and the override's own
+# coordinate is appended below as a second, mostly blank row: two rows
+# sharing one coordinate. Real instance: dotnet:csharp-ls's Mason row is
+# named "csharp-language-server"; catalog-overrides.tsv renames it to
+# "csharp-ls", and today that produces exactly this fork.
+FORK_DIR="$(mktemp -d "$BASE/merge-fork.XXXXXX")"
+FORK_BASE="$FORK_DIR/base.tsv"
+cat >"$FORK_BASE" <<'EOF'
+dotnet:csharp-ls	csharp-language-server	lsp	c#	https://github.com/razzmatazz/csharp-language-server	960	2026-07-25	Roslyn-based LSP language server for C#.
+EOF
+FORK_OVERRIDES="$FORK_DIR/overrides.tsv"
+cat >"$FORK_OVERRIDES" <<'EOF'
+dotnet:csharp-ls	csharp-ls	lsp	csharp
+EOF
+fork_out=$(bash "$VISE" __merge-overrides "$FORK_BASE" "$FORK_OVERRIDES" 2>&1)
+fork_rows=$(printf '%s\n' "$fork_out" | awk -F'\t' '$1 == "dotnet:csharp-ls"' | grep -c .)
+if [ "$fork_rows" = "1" ]; then
+    ok "merge: a renaming override rewrites the existing row instead of forking a duplicate coordinate"
+else
+    bad "merge: a renaming override rewrites the existing row instead of forking a duplicate coordinate" "$fork_out"
+fi
+if printf '%s\n' "$fork_out" | grep -qx $'dotnet:csharp-ls\tcsharp-ls\tlsp\tcsharp\thttps://github.com/razzmatazz/csharp-language-server\t960\t2026-07-25\tRoslyn-based LSP language server for C#.'; then
+    ok "merge: the rewritten row keeps the catalog's homepage/stars/updated/description"
+else
+    bad "merge: the rewritten row keeps the catalog's homepage/stars/updated/description" "$fork_out"
+fi
+
+# Control: an override matching no row by name OR coordinate is genuinely
+# new and must still append as its own synthetic row — the fix has to tell
+# "renaming an existing row" apart from "adding a new one" by coordinate,
+# not swallow every unmatched-by-name override into whatever row comes first.
+cat >"$FORK_OVERRIDES" <<'EOF'
+dotnet:csharp-ls	csharp-ls	lsp	csharp
+npm:brand-new-tool	brand-new-tool	linter	javascript
+EOF
+new_out=$(bash "$VISE" __merge-overrides "$FORK_BASE" "$FORK_OVERRIDES" 2>&1)
+if printf '%s\n' "$new_out" | grep -qx $'npm:brand-new-tool\tbrand-new-tool\tlinter\tjavascript\t-\t-\t-\t-'; then
+    ok "merge: an override matching no existing coordinate still appends as a synthetic row"
+else
+    bad "merge: an override matching no existing coordinate still appends as a synthetic row" "$new_out"
+fi
+
+# Invariant: whatever the merge produces, no two rows may ever share a
+# coordinate — this is exactly what vise doctor's duplicate-coordinate check
+# guards in the real catalog after every sync.
+dup_coords=$(printf '%s\n' "$new_out" | awk -F'\t' '{print $1}' | sort | uniq -d)
+if [ -z "$dup_coords" ]; then
+    ok "merge: no two output rows share a coordinate"
+else
+    bad "merge: no two output rows share a coordinate" "$dup_coords"
+fi
+
 # --- vise doctor: offline lint over catalog.tsv --------------------------
 # Every fixture below is self-contained (own catalog, own registry, own
 # overrides) so a check's test can never pass by accident from repo state:
