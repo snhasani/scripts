@@ -245,6 +245,24 @@ else
     bad "__preview: -- separates flags from a coordinate starting with -" "$(cat "$DASH_PREVIEW_CALLS")"
 fi
 
+# --- version floor: bash >= 5 required ---------------------------------------
+# `#!/usr/bin/env bash` resolves to whatever bash sits first on PATH — on a
+# machine that also has an old system bash (macOS ships /bin/bash 3.2.57),
+# running the script directly under it must fail with a clear message instead
+# of whatever raw crash the first bash-5-only construct happens to produce.
+# Skips (rather than failing) when no old bash is present to prove it against.
+if [ -x /bin/bash ] && ! /bin/bash -c '((BASH_VERSINFO[0] >= 5))' 2>/dev/null; then
+    out=$(/bin/bash "$VISE" -l 2>&1)
+    rc=$?
+    if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -qF 'vise: needs bash >= 5'; then
+        ok "version floor: /bin/bash (< 5) refuses with a clear message, not a raw crash"
+    else
+        bad "version floor: /bin/bash (< 5) refuses with a clear message, not a raw crash" "rc=$rc out=[$out]"
+    fi
+else
+    printf '  \033[33mskip\033[0m version floor (/bin/bash is already >= 5 or absent)\n'
+fi
+
 # --- bash 3.2 compatibility ---------------------------------------------------
 # macOS ships /bin/bash 3.2.57. Bash below 4.4 treats "${ARR[@]}" on a
 # zero-length array as an unset variable under `set -u`, aborting the script
@@ -560,7 +578,15 @@ fi
 # fallback `mise ...` branch would run and fail with "command not found"
 # instead of quietly reading real machine state.
 SEAM_DIR="$(mktemp -d "$BASE/seams.XXXXXX")"
-NO_MISE_PATH="/usr/bin:/bin"
+# A stub dir carrying only a symlink to THIS run's own bash keeps `bash "$VISE"`
+# resolving to it under the stripped PATH below — on a machine where bash and
+# mise are installed side by side (e.g. both in Homebrew's bin/), excluding
+# mise's directory would otherwise also exclude the only bash new enough to
+# clear vise's own version floor, and every seam invocation would fail on that
+# guard before ever reaching the seam it's meant to exercise.
+NO_MISE_BASH_DIR="$(mktemp -d "$BASE/no-mise-bash.XXXXXX")"
+ln -s "$BASH" "$NO_MISE_BASH_DIR/bash"
+NO_MISE_PATH="$NO_MISE_BASH_DIR:/usr/bin:/bin"
 if [ -n "$(PATH="$NO_MISE_PATH" command -v mise 2>/dev/null)" ]; then
     printf 'mise is reachable on %s, seam tests would be meaningless, pick a narrower PATH\n' "$NO_MISE_PATH" >&2
     exit 2
