@@ -1252,6 +1252,16 @@ vise::tui() {
     local bind_open="ctrl-o:execute-silent(${self_q} __open {8})"
     local bind_scope_cycle="ctrl-s:execute-silent(${self_q} __cycle-scope)+reload(${self_q} __render)+transform-prompt(${self_q} __prompt)"
 
+    # --layout=reverse is not cosmetic: fzf's *default* layout (prompt at the
+    # bottom, list growing upward) ships with tab bound to toggle+down, and
+    # "down" in that layout's default keymap does not advance to the next
+    # candidate — two Tabs toggle the SAME row on then off instead of
+    # selecting two different rows, so tab multi-select is silently
+    # nonfunctional without this flag. Confirmed directly against bare fzf
+    # (no vise involved): identical binary and version, --layout=reverse
+    # is the only variable that changes the outcome. Also fixes __prompt's
+    # line landing at the top of the pane, which every ctrl-a/ctrl-s pty
+    # assertion assumes when it reads `capture-pane | head -1`.
     vise::render | fzf \
         --delimiter=$'\t' \
         --with-nth=3..6 \
@@ -1259,6 +1269,7 @@ vise::tui() {
         --multi \
         --ansi \
         --height=100% \
+        --layout=reverse \
         --preview="${self_q} __preview {1} {2} {3} {4} {5} {6} {7} {8} {9} {10}" \
         --preview-window="${VISE_PREVIEW_POS:-down},45%,border-top" \
         --footer='ctrl-g:use-global  ctrl-t:use-project  ctrl-x:remove  ctrl-u:upgrade  ctrl-s:scope(all/global/project)  ctrl-a:toggle(tooling/all)  ctrl-o:open-url  ctrl-r:reload' \
