@@ -84,12 +84,10 @@ unavailable:cql-language-server	cql-language-server	lsp	cql	https://github.com/c
 cargo:cqlls	cqlls	lsp	cql	https://github.com/Akzestia/cqlls	6	2026-05-30	The Best Open Source Language Server for CQL (Cassandra Query Language) ^_^
 go:github.com/cockroachdb/crlfmt	crlfmt	formatter	go	https://github.com/cockroachdb/crlfmt	20	2026-07-21	Formatter for Go code that enforces the CockroachDB Style Guide.
 github:elbywan/crystalline	crystalline	lsp	crystal	https://github.com/elbywan/crystalline	518	2026-05-31	A Language Server Protocol implementation for Crystal.
-dotnet:csharp-ls	csharp-language-server	lsp	c#	https://github.com/razzmatazz/csharp-language-server	960	2026-07-25	Roslyn-based LSP language server for C#.
-dotnet:csharp-ls	csharp-ls	lsp	csharp	-	-	-	-
+dotnet:csharp-ls	csharp-ls	lsp	csharp	https://github.com/razzmatazz/csharp-language-server	960	2026-07-25	Roslyn-based LSP language server for C#.
 dotnet:csharpier	csharpier	formatter	c#	https://csharpier.com	-	-	CSharpier is an opinionated code formatter for C#.
 cspell	cspell	linter	any	https://github.com/streetsidesoftware/cspell	1663	2026-08-02	A Spell Checker for Code.
 npm:@vlabo/cspell-lsp	cspell-lsp	lsp	any	https://github.com/vlabo/cspell-lsp	76	2025-10-30	Language Server Protocol implementation for CSpell, a spell checker for code.
-npm:vscode-langservers-extracted	css-lsp	lsp	css,scss,less	https://github.com/microsoft/vscode-css-languageservice	384	2026-08-01	Language Server Protocol implementation for CSS, SCSS & LESS.
 npm:css-variables-language-server	css-variables-language-server	lsp	css,scss,less	https://github.com/vunguyentuan/vscode-css-variables	195	2026-03-10	Autocompletion and go-to-definition for project-wide CSS variables.
 github:csskit/csskit	csskit	lsp,formatter,linter	css	https://csskit.rs	-	-	Beautiful, fast, and powerful CSS tooling with zero configuration
 npm:cssmodules-language-server	cssmodules-language-server	lsp	css	https://github.com/antonk52/cssmodules-language-server	90	2025-11-08	Autocompletion and go-to-definition for cssmodules.
@@ -300,8 +298,7 @@ unavailable:ocaml-lsp	ocaml-lsp	lsp	ocaml	https://github.com/ocaml/ocaml-lsp	909
 unavailable:ocamlformat	ocamlformat	formatter	ocaml	https://github.com/ocaml-ppx/ocamlformat	-	-	ocamlformat is a tool for formatting OCaml code. It automatically adjusts the layout of your code to follow the recommended style guidelines, making it easier to read and understand.
 pipx:oelint-adv	oelint-adv	linter	bitbake	https://github.com/priv-kweihmann/oelint-adv	86	2026-07-28	Linter for bitbake recipes.
 github:DanielGavin/ols	ols	lsp,formatter	odin	https://github.com/DanielGavin/ols	1124	2026-08-02	Language server for Odin. This project is still in early development.
-github:OmniSharp/omnisharp-roslyn	omnisharp	lsp	csharp	-	-	-	-
-github:OmniSharp/omnisharp-roslyn	omnisharp-mono	lsp	c#	https://github.com/OmniSharp/omnisharp-roslyn	2054	2026-05-25	OmniSharp language server based on Roslyn workspaces. This version of Omnisharp requires Mono to be installed on Linux & macOS.
+github:OmniSharp/omnisharp-roslyn	omnisharp	lsp	csharp	https://github.com/OmniSharp/omnisharp-roslyn	2054	2026-05-25	OmniSharp language server based on Roslyn workspaces. This version of Omnisharp requires Mono to be installed on Linux & macOS.
 opa	opa	linter,formatter	rego	https://github.com/open-policy-agent/opa	12061	2026-08-01	Open Policy Agent (OPA) is an open source, general-purpose policy engine.
 github:Galarius/opencl-language-server	opencl-language-server	lsp	opencl	https://github.com/Galarius/opencl-language-server	14	2026-07-05	Provides an OpenCL kernel diagnostics.
 github:vscode-abl/vscode-abl	openedge-language-server	lsp	progress,openedge	https://github.com/vscode-abl/vscode-abl	52	2026-07-29	OpenEdge Language Server.
@@ -509,7 +506,7 @@ npm:vim-language-server	vim-language-server	lsp	vimscript	https://github.com/iam
 pipx:vim-vint	vint	linter	vimscript	https://github.com/Vimjas/vint	707	2023-12-29	Fast and Highly Extensible Vim script Language Lint implemented in Python.
 github:vlang/vls	vls	lsp	v	https://github.com/vlang/vls	369	2026-07-29	V language server.
 unavailable:vscode-home-assistant	vscode-home-assistant	lsp	yaml	https://github.com/keesschollaart81/vscode-home-assistant	705	2026-03-10	Language Server Protocol implementation for Home Assistant.
-npm:vscode-langservers-extracted	vscode-langservers-extracted	lsp	html,css,json	-	-	-	-
+npm:vscode-langservers-extracted	vscode-langservers-extracted	lsp	html,css,json	https://github.com/microsoft/vscode-css-languageservice	384	2026-08-01	Language Server Protocol implementation for CSS, SCSS & LESS.
 npm:vscode-solidity-server	vscode-solidity-server	lsp	solidity	https://github.com/juanfranblanco/vscode-solidity	958	2026-05-28	Solidity language server.
 unavailable:vscode-spring-boot-tools	vscode-spring-boot-tools	lsp	java	https://github.com/spring-projects/spring-tools	975	2026-08-01	VS Code Language Server for Spring Boot VSCode extension and Language Server providing support for working with Spring Boot application.properties, application.yml and .java files. Note: this extension has a dependency on VS Code extension of Language Support for Java™ by Red Hat.
 npm:@vtsls/language-server	vtsls	lsp	javascript,typescript	https://github.com/yioneko/vtsls	1068	2026-08-02	LSP wrapper around the TypeScript extension bundled with VSCode.
