@@ -417,11 +417,40 @@ vise::render() {
     vise::debug "mise registry   $(($(vise::now_ms) - t0))ms"
     vise::debug "global config   $(vise::global_config)"
 
+    # --argjson passes the whole JSON text as ONE argv string. macOS enforces
+    # only the aggregate ARG_MAX, so this was invisible there, but Linux's
+    # execve additionally caps any SINGLE argv string at MAX_ARG_STRLEN
+    # (128KiB, 32 pages) — and catalog.tsv's JSON encoding clears that easily,
+    # taking the whole picker down with "Argument list too long" (render
+    # emits nothing, so fzf has no rows). Staging each blob in a scratch dir
+    # and handing jq the paths (--rawfile + fromjson) routes the data through
+    # the filesystem instead of argv, on both platforms.
+    #
+    # Unlike vise::write_atomic, this does NOT save/restore whatever EXIT trap
+    # the caller already owned: vise::tui pipes into this function
+    # (`vise::render | fzf`), which runs it in a throwaway subshell that
+    # inherits vise::tui's trap referencing vise::tui's *own* local
+    # ($state_dir). Restoring and then letting THIS subshell exit fires that
+    # trap while still holding a live binding to $state_dir — deleting
+    # vise::tui's scratch dir out from under it, before vise::tui itself is
+    # anywhere near done with it. This function only ever owns its own
+    # scratch dir, so it only ever needs to clear its OWN trap, never
+    # resurrect an inherited one.
+    local scratch
+    scratch=$(mktemp -d) || return 1
+    # shellcheck disable=SC2064 # deliberately eager: see vise::write_atomic
+    trap "rm -rf '$scratch'" EXIT
+    printf '%s' "$catalog_json" >"$scratch/catalog.json"
+    printf '%s' "$config_json" >"$scratch/config.json"
+    printf '%s' "$ls_json" >"$scratch/ls.json"
+    printf '%s' "$registry_json" >"$scratch/registry.json"
+
+    local rc=0
     jq -rn \
-        --argjson catalog "$catalog_json" \
-        --argjson config "$config_json" \
-        --argjson lsdata "$ls_json" \
-        --argjson registry "$registry_json" \
+        --rawfile catalog_raw "$scratch/catalog.json" \
+        --rawfile config_raw "$scratch/config.json" \
+        --rawfile lsdata_raw "$scratch/ls.json" \
+        --rawfile registry_raw "$scratch/registry.json" \
         --arg global_cfg "$(vise::global_config)" \
         --arg filter_mode "$filter_mode" \
         --arg scope_mode "$scope_mode" \
@@ -430,10 +459,14 @@ vise::render() {
         --argjson lang_w "$LANG_W" \
         --argjson ver_w "$VER_W" \
         --argjson stars_w "$STARS_W" '
+    ($catalog_raw | fromjson) as $catalog
+    | ($config_raw | fromjson) as $config
+    | ($lsdata_raw | fromjson) as $lsdata
+    | ($registry_raw | fromjson) as $registry
     # Character-based padding: printf %-*.*s pads/truncates by byte, and the
     # glyphs (and any non-ASCII catalog text) are multi-byte UTF-8, so a byte
     # cut can slice one in half. jq string length/slicing is codepoint-based.
-    def pad($w):
+    | def pad($w):
       tostring as $t
       | ($t | length) as $n
       | if $n > $w then $t[0:$w] else $t + (" " * ($w - $n)) end;
@@ -527,7 +560,11 @@ vise::render() {
        (.stars | pad($stars_w)),
        .homepage, .updated, .description]
     | @tsv
-  '
+  ' || rc=$?
+
+    trap - EXIT
+    rm -rf "$scratch"
+    return "$rc"
 }
 
 vise::list() {

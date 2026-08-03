@@ -810,6 +810,41 @@ else
         "rc=$rc3 out=[$scope_out3]"
 fi
 
+# --- vise::render survives a catalog whose JSON blows Linux's argv cap ------
+# vise::render used to hand jq's --argjson its whole catalog/config/ls/registry
+# documents as single argv strings. macOS has no per-argument cap, only the
+# aggregate ARG_MAX, so this was invisible there — but Linux's execve enforces
+# MAX_ARG_STRLEN, 128KiB (32 pages) on any ONE argv string regardless of the
+# total. catalog.tsv's real ~95KB re-encodes to well over that once every row
+# becomes a JSON object, and `jq: Argument list too long` took the whole
+# picker down with it (render emits nothing, so fzf has no rows). 2000 rows
+# here JSON-encode to ~430KB — more than 3x the 128KiB cap, so this fixture
+# exercises the limit itself, not this repo's actual catalog size.
+BIGCAT_DIR="$(mktemp -d "$BASE/bigcat.XXXXXX")"
+BIGCAT_CATALOG="$BIGCAT_DIR/catalog.tsv"
+awk 'BEGIN {
+    for (i = 1; i <= 2000; i++) {
+        printf "npm:fixture-tool-%04d\tfixture-tool-%04d\tlinter\tjavascript\t-\t-\t-\t-\n", i, i
+    }
+}' >"$BIGCAT_CATALOG"
+echo '[]' >"$BIGCAT_DIR/config.json"
+echo '{}' >"$BIGCAT_DIR/ls.json"
+echo '[]' >"$BIGCAT_DIR/registry.json"
+bigcat_out=$(cd "$REPO_ROOT" && PATH="$NO_MISE_PATH" VISE_CATALOG="$BIGCAT_CATALOG" \
+    VISE_CONFIG_JSON="$BIGCAT_DIR/config.json" VISE_LS_JSON="$BIGCAT_DIR/ls.json" \
+    VISE_REGISTRY_JSON="$BIGCAT_DIR/registry.json" \
+    MISE_GLOBAL_CONFIG_FILE="$BIGCAT_DIR/global.toml" bash "$VISE" list 2>&1)
+bigcat_rc=$?
+bigcat_rows=$(printf '%s\n' "$bigcat_out" | grep -c .)
+if [ "$bigcat_rc" -eq 0 ] && [ "$bigcat_rows" = "2000" ] &&
+    printf '%s\n' "$bigcat_out" | awk -F'\t' '$1 == "npm:fixture-tool-0001"' | grep -q . &&
+    printf '%s\n' "$bigcat_out" | awk -F'\t' '$1 == "npm:fixture-tool-2000"' | grep -q .; then
+    ok "vise list renders a catalog whose JSON encoding exceeds Linux's 128KiB per-argv-string cap"
+else
+    bad "vise list renders a catalog whose JSON encoding exceeds Linux's 128KiB per-argv-string cap" \
+        "rc=$bigcat_rc rows=$bigcat_rows out=[$(printf '%s\n' "$bigcat_out" | head -3)]"
+fi
+
 # --- vise::preview: seam VISE_PREVIEW_LS_TEXT --------------------------------
 # vise::preview's own `mise ls -- "$coord" 2>/dev/null || true` used to
 # swallow a missing-mise "command not found" (127) identically to a genuine
