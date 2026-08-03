@@ -854,6 +854,22 @@ vise::doctor_dup_name() {
     return "$rc"
 }
 
+# A bare coordinate (no "backend:" prefix) only resolves through mise's own
+# shorthand table; one absent from it installs nothing and fails silently.
+vise::doctor_dead_shorthand() {
+    local catalog="$1" shorts="$2" bare coord rc=0
+    bare=$(awk -F'\t' '!/^[[:space:]]*(#|$)/ && $1 !~ /:/ {print $1}' "$catalog" | sort -u)
+    [[ -z "$bare" ]] && return 0
+    while IFS= read -r coord; do
+        [[ -z "$coord" ]] && continue
+        if ! grep -qxF "$coord" <<<"$shorts"; then
+            printf 'vise: doctor: dead shorthand: %s has no ":" and is not a mise registry shorthand\n' "$coord"
+            rc=1
+        fi
+    done <<<"$bare"
+    return "$rc"
+}
+
 vise::doctor() {
     local catalog="$CATALOG_FILE" rc=0
     if [[ ! -r "$catalog" ]]; then
@@ -861,10 +877,19 @@ vise::doctor() {
         return 1
     fi
 
+    local registry_json shorts
+    if [[ -n "${VISE_REGISTRY_JSON:-}" ]]; then
+        registry_json=$(cat "$VISE_REGISTRY_JSON")
+    else
+        registry_json=$(mise registry --json)
+    fi
+    shorts=$(jq -r '.[].short' <<<"$registry_json" | sort -u)
+
     vise::doctor_columns "$catalog" || rc=1
     vise::doctor_empty_fields "$catalog" || rc=1
     vise::doctor_dup_coord "$catalog" || rc=1
     vise::doctor_dup_name "$catalog" || rc=1
+    vise::doctor_dead_shorthand "$catalog" "$shorts" || rc=1
 
     return "$rc"
 }
