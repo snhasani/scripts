@@ -918,5 +918,32 @@ else
     bad "doctor: wrongly excluded catches an unavailable row that mise can actually install" "rc=$rc out=[$out]"
 fi
 
+# 7. dead override: sync merges catalog-overrides.tsv onto the Mason-derived
+# base by name; an override whose name matches nothing there becomes a
+# synthetic row instead — homepage and description both stamped "-" (see
+# vise::sync's END block). A live override instead lands on a real Mason row,
+# which carries real metadata.
+OVERRIDE_DIR="$(mktemp -d "$DOCTOR_DIR/override.XXXXXX")"
+OVERRIDE_CATALOG="$OVERRIDE_DIR/catalog.tsv"
+cat >"$OVERRIDE_CATALOG" <<'EOF'
+dotnet:dead-tool	dead-tool	lsp	csharp	-	-	-	-
+npm:live-tool	live-tool	linter	javascript	https://example.com/live	42	2026-01-01	A real Mason description
+EOF
+OVERRIDE_FILE="$OVERRIDE_DIR/overrides.tsv"
+cat >"$OVERRIDE_FILE" <<'EOF'
+dotnet:dead-tool	dead-tool	lsp	csharp
+npm:live-tool	live-tool	linter	javascript
+EOF
+out=$(VISE_CATALOG="$OVERRIDE_CATALOG" VISE_REGISTRY_JSON="$DOCTOR_EMPTY_REGISTRY" \
+    VISE_OVERRIDES="$OVERRIDE_FILE" bash "$VISE" doctor 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q 'dead override' &&
+    printf '%s\n' "$out" | grep -q 'dead-tool' &&
+    ! printf '%s\n' "$out" | grep -q 'live-tool'; then
+    ok "doctor: dead override catches an override that matched nothing and became a synthetic row"
+else
+    bad "doctor: dead override catches an override that matched nothing and became a synthetic row" "rc=$rc out=[$out]"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
