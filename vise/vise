@@ -149,18 +149,15 @@ vise::mutate() {
 
 # Rows marked unavailable are listed for parity with the upstream registry but
 # ship through an ecosystem mise has no backend for. Reports the reason and
-# drops each one individually into $VISE_VALID rather than the caller's whole
-# batch: a tab multi-select's one bad row must not withhold the coordinates
-# that were fine (--help: "every action applies to the whole selection").
-# Returns 1 if anything was rejected, so the caller's exit code still says
-# something was skipped.
-#
-# Writes to a global instead of returning the list via stdout/mapfile so this
-# stays usable under bash 3.2 (mapfile and namerefs are both bash 4+, and this
-# script's dispatch layer is explicitly kept 3.2-safe).
-VISE_VALID=()
+# drops each one individually into the caller's OWN array (via the $1
+# nameref) rather than withholding the whole batch: a tab multi-select's one
+# bad row must not withhold the coordinates that were fine (--help: "every
+# action applies to the whole selection"). Returns 1 if anything was
+# rejected, so the caller's exit code still says something was skipped.
 vise::partition_available() {
-    VISE_VALID=()
+    local -n valid_ref="$1"
+    shift
+    valid_ref=()
     local c rc=0
     for c in "$@"; do
         if [[ "$c" == unavailable:* ]]; then
@@ -168,7 +165,7 @@ vise::partition_available() {
                 "${c#unavailable:}" >&2
             rc=1
         else
-            VISE_VALID+=("$c")
+            valid_ref+=("$c")
         fi
     done
     return "$rc"
@@ -192,22 +189,25 @@ vise::require_selection() {
 vise::use_global() {
     vise::require_selection "use-global" "$@" || return 1
     local rc=0
-    vise::partition_available "$@" || rc=1
-    ((${#VISE_VALID[@]} > 0)) && { vise::mutate mise use -g -- "${VISE_VALID[@]}" || rc=1; }
+    local -a valid
+    vise::partition_available valid "$@" || rc=1
+    ((${#valid[@]} > 0)) && { vise::mutate mise use -g -- "${valid[@]}" || rc=1; }
     return "$rc"
 }
 vise::use_project() {
     vise::require_selection "use-project" "$@" || return 1
     local rc=0
-    vise::partition_available "$@" || rc=1
-    ((${#VISE_VALID[@]} > 0)) && { vise::mutate mise use -- "${VISE_VALID[@]}" || rc=1; }
+    local -a valid
+    vise::partition_available valid "$@" || rc=1
+    ((${#valid[@]} > 0)) && { vise::mutate mise use -- "${valid[@]}" || rc=1; }
     return "$rc"
 }
 vise::upgrade() {
     vise::require_selection "upgrade" "$@" || return 1
     local rc=0
-    vise::partition_available "$@" || rc=1
-    ((${#VISE_VALID[@]} > 0)) && { vise::mutate mise upgrade -- "${VISE_VALID[@]}" || rc=1; }
+    local -a valid
+    vise::partition_available valid "$@" || rc=1
+    ((${#valid[@]} > 0)) && { vise::mutate mise upgrade -- "${valid[@]}" || rc=1; }
     return "$rc"
 }
 
