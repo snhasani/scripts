@@ -95,7 +95,7 @@ nonzero exit:
 | duplicate name | two coordinates sharing one name |
 | dead shorthand | a bare coordinate (no `backend:` prefix) absent from `mise registry`'s shorthands |
 | wrongly excluded | an `unavailable:` row whose name is actually a `mise registry` shorthand |
-| dead override | a `catalog-overrides.tsv` row that matched nothing and became a metadata-empty synthetic row |
+| dead override | a `catalog-overrides.tsv` row that matched nothing and forks a coordinate an existing row already owns (a genuinely new coordinate — a deliberate addition — is silent) |
 | coord syntax | a literal `%40`, whitespace, `::`, a leading/trailing `:`, a leftover `@version`, or a malformed `github:` owner/repo |
 | kind domain | a kind outside `lsp`/`linter`/`formatter` |
 | field shape | stars not numeric-or-`-`, or updated not `YYYY-MM-DD`-or-`-` |

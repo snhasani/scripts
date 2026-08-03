@@ -976,6 +976,16 @@ vise::doctor_wrongly_excluded() {
 # END block). That shape — override's own coord/kind/lang paired with
 # "-"/"-" in homepage/description — is the only offline signal a dead
 # override leaves behind.
+#
+# That shape alone is not a bug: catalog-overrides.tsv deliberately adds
+# tools Mason never lists (npm:eslint, npm:typescript, pipx:clang-tidy today),
+# and every one of those is a synthetic row by design. The actual bug is an
+# override's coordinate forking a row some OTHER line already owns — so a
+# synthetic row is only flagged when its coordinate is not unique in the
+# catalog; a genuinely new coordinate is silent. Needs a full pass over the
+# catalog before any row can be judged (a coordinate's other occurrences may
+# be on either side of it), hence the two-pass buffer-then-decide shape below
+# instead of deciding inline per line.
 vise::doctor_dead_override() {
     local catalog="$1" overrides="$2"
     [[ -r "$overrides" ]] || return 0
@@ -989,13 +999,24 @@ vise::doctor_dead_override() {
             }
         }
         !/^[[:space:]]*(#|$)/ {
+            seen[$1]++
             if ($2 in coord && $1 == coord[$2] && $3 == kind[$2] && $4 == lang[$2] &&
                 $5 == "-" && $8 == "-") {
-                printf "vise: doctor: dead override: %s (%s) matched nothing, became a synthetic row with no metadata\n", $2, $1
-                bad = 1
+                cand_n++
+                cand_name[cand_n] = $2; cand_coord[cand_n] = $1
             }
         }
-        END { exit bad }
+        END {
+            bad = 0
+            for (k = 1; k <= cand_n; k++) {
+                if (seen[cand_coord[k]] > 1) {
+                    printf "vise: doctor: dead override: %s (%s) forks an existing row sharing its coordinate\n", \
+                        cand_name[k], cand_coord[k]
+                    bad = 1
+                }
+            }
+            exit bad
+        }
     ' "$catalog"
 }
 
