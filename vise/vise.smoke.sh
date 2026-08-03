@@ -945,5 +945,35 @@ else
     bad "doctor: dead override catches an override that matched nothing and became a synthetic row" "rc=$rc out=[$out]"
 fi
 
+# 8. coord syntax: several distinct malformations, one check. The npm scoped
+# control row (a real catalog.tsv shape: npm:@angular/language-server) must
+# survive untouched — an "@" is legitimate right after the backend prefix,
+# only a *trailing* "@version" left over from PURL parsing is the bug.
+SYNTAX_CATALOG="$(mktemp -d "$DOCTOR_DIR/syntax.XXXXXX")/catalog.tsv"
+printf 'npm:@angular/language-server\tscoped-ok\tlsp\ttypescript\t-\t-\t-\t-\n' >"$SYNTAX_CATALOG"
+# A scope starting with a digit (a real one: @1password) would look like a
+# leftover version to a naive split-on-"@" that ignores position.
+printf 'npm:@1password/op-cli\tscoped-digit-ok\tlsp\tshell\t-\t-\t-\t-\n' >>"$SYNTAX_CATALOG"
+printf 'npm:has%%40escape\thas-escape\tlinter\tjavascript\t-\t-\t-\t-\n' >>"$SYNTAX_CATALOG"
+printf 'npm:has space\thas-space\tlinter\tjavascript\t-\t-\t-\t-\n' >>"$SYNTAX_CATALOG"
+printf 'npm::doublecolon\tdoublecolon\tlinter\tjavascript\t-\t-\t-\t-\n' >>"$SYNTAX_CATALOG"
+printf ':leadingcolon\tleadingcolon\tlinter\tjavascript\t-\t-\t-\t-\n' >>"$SYNTAX_CATALOG"
+printf 'trailingcolon:\ttrailingcolon\tlinter\tjavascript\t-\t-\t-\t-\n' >>"$SYNTAX_CATALOG"
+printf 'cargo:leftover@1.2.3\tleftover\tlinter\trust\t-\t-\t-\t-\n' >>"$SYNTAX_CATALOG"
+printf 'github:noslash\tnoslash\tlsp\tgo\t-\t-\t-\t-\n' >>"$SYNTAX_CATALOG"
+printf 'github:owner/repo/extra\textraslash\tlsp\tgo\t-\t-\t-\t-\n' >>"$SYNTAX_CATALOG"
+out=$(VISE_CATALOG="$SYNTAX_CATALOG" VISE_REGISTRY_JSON="$DOCTOR_EMPTY_REGISTRY" \
+    VISE_OVERRIDES="$DOCTOR_EMPTY_OVERRIDES" bash "$VISE" doctor 2>&1)
+rc=$?
+bad_row_count=$(printf '%s\n' "$out" | grep -c 'coord syntax')
+if [ "$rc" -ne 0 ] && [ "$bad_row_count" = "8" ] &&
+    ! printf '%s\n' "$out" | grep -q 'scoped-ok' &&
+    ! printf '%s\n' "$out" | grep -q 'scoped-digit-ok'; then
+    ok "doctor: coord syntax catches malformed coordinates, spares a legit npm scope"
+else
+    bad "doctor: coord syntax catches malformed coordinates, spares a legit npm scope" \
+        "rc=$rc bad_row_count=$bad_row_count out=[$out]"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
