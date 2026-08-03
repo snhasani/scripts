@@ -86,6 +86,7 @@ USAGE
   vise                     open the picker
   vise -l | list           print the rows, no fzf
   vise -s | sync           rebuild catalog.tsv from the registry (needs network)
+  vise doctor              lint catalog.tsv offline; nonzero exit if broken
   vise -h | --help         this text
 
 FLAGS
@@ -796,6 +797,33 @@ vise::sync() {
         "$(awk -F'\t' '!/^#/ && $6 != "-"' "$out" | wc -l | tr -d ' ')" >&2
 }
 
+# Every column-count row is malformed by definition (the generator always
+# emits 8), so it's named individually rather than just counted.
+vise::doctor_columns() {
+    local catalog="$1"
+    awk -F'\t' '
+        /^[[:space:]]*(#|$)/ { next }
+        NF != 8 { printf "vise: doctor: column count: expected 8 fields, got %d: %s\n", NF, $0; bad = 1 }
+        END { exit bad }
+    ' "$catalog"
+}
+
+# Offline lint over catalog.tsv, cheap enough to always run before install:
+# each check is its own function so a broken predicate reddens exactly one
+# smoke test instead of the whole subcommand. Silent + exit 0 on a clean
+# catalog; otherwise every violation is printed and the exit code says so.
+vise::doctor() {
+    local catalog="$CATALOG_FILE" rc=0
+    if [[ ! -r "$catalog" ]]; then
+        printf 'vise: doctor: no catalog at %s\n' "$catalog" >&2
+        return 1
+    fi
+
+    vise::doctor_columns "$catalog" || rc=1
+
+    return "$rc"
+}
+
 vise::tui() {
     local self_q
     self_q=${SELF@Q}
@@ -911,6 +939,9 @@ list)
     ;;
 sync)
     vise::sync "${ARGS[0]:-}"
+    ;;
+doctor)
+    vise::doctor
     ;;
 help)
     vise::usage
