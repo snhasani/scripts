@@ -18,6 +18,7 @@ network.
 vise                # fzf TUI
 vise -l | list       # plain rows, no fzf
 vise -s | sync       # rebuild catalog.tsv (needs network)
+vise doctor          # lint catalog.tsv offline; nonzero exit if broken
 vise -h | --help     # full reference
 
 -v  | --verbose      # log what is happening
@@ -78,6 +79,30 @@ needs an explicit alias, not normalisation.
 
 Add a tool by appending a row to `catalog-overrides.tsv`. That is the whole
 update path.
+
+### How `doctor` works
+
+`vise doctor` is a single offline pass over `catalog.tsv` plus the local
+`mise registry --json` — no network, no `mise ls-remote`. Ten checks, silent
+and exit 0 on a clean catalog, otherwise every violation printed and a
+nonzero exit:
+
+| check | catches |
+|---|---|
+| column count | a row with other than 8 tab-separated fields |
+| empty field | a blank coordinate, name, kind or language |
+| duplicate coordinate | two names sharing one coordinate (an override-merge collision — see below) |
+| duplicate name | two coordinates sharing one name |
+| dead shorthand | a bare coordinate (no `backend:` prefix) absent from `mise registry`'s shorthands |
+| wrongly excluded | an `unavailable:` row whose name is actually a `mise registry` shorthand |
+| dead override | a `catalog-overrides.tsv` row that matched nothing and became a metadata-empty synthetic row |
+| coord syntax | a literal `%40`, whitespace, `::`, a leading/trailing `:`, a leftover `@version`, or a malformed `github:` owner/repo |
+| kind domain | a kind outside `lsp`/`linter`/`formatter` |
+| field shape | stars not numeric-or-`-`, or updated not `YYYY-MM-DD`-or-`-` |
+
+Not checked: whether a coordinate actually resolves (Mason's `bin` vs. its
+PURL, or `mise ls-remote`) — deciding that needs the network and is a
+separate, opt-in mode.
 
 ## Env
 
