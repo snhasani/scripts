@@ -44,10 +44,19 @@ jobs:
               - 'mise.toml'
               - '.github/workflows/e2e.yml'
 
-      - name: Install tmux, fzf, zsh
+      # zsh only: it's a login shell the matrix drives at /usr/bin/zsh, not a
+      # project tool mise manages. tmux and fzf come from mise below instead
+      # of apt — Ubuntu's apt fzf lags Homebrew (what this repo develops
+      # against) by dozens of releases and doesn't support --footer at all,
+      # which vise::tui depends on. Pinning via mise.toml, like shfmt and
+      # shellcheck, makes CI drive the exact fzf/tmux this was built against.
+      - name: Install zsh
         if: steps.filter.outputs.pty == 'true'
-        run: sudo apt-get update && sudo apt-get install -y tmux fzf zsh
+        run: sudo apt-get update && sudo apt-get install -y zsh
 
+      # export_path defaults to true: mise's PATH entries land in
+      # GITHUB_PATH here, so the pinned fzf/tmux are already on PATH by the
+      # time the PTY suite step below runs.
       - name: Provision pinned tools
         if: steps.filter.outputs.pty == 'true'
         uses: jdx/mise-action@v4

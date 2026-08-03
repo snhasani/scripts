@@ -2,6 +2,12 @@
 shfmt = "3.13.1"
 shellcheck = "0.11.0"
 lefthook = "2.1.10"
+# Pinned (not left to apt) so the pty suite drives the SAME fzf/tmux in CI as
+# on a dev machine. Ubuntu's apt fzf lags dev-machine Homebrew by ~30 minor
+# releases and doesn't understand --footer/--footer-border at all — vise::tui
+# depends on that flag, so "whatever apt has" was never a sound contract.
+"aqua:junegunn/fzf" = "0.74.2"
+"aqua:tmux/tmux-builds" = "3.7b"
 
 # Shell scripts are found by shfmt itself (shebang + *.sh), never hand-listed, so
 # a new tool needs no wiring here. bin/ holds only PATH symlinks to entrypoints —
