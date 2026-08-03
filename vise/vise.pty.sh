@@ -21,18 +21,18 @@
 # install/remove tools on the machine running this suite without it.
 #
 # ============================================================================
-# COVERAGE: what's here, what's not yet, and why
+# COVERAGE: what's here, and why ctrl-g/t/x/u took a second pass
 # ============================================================================
 # Covered, each with a killed mutant (see the case-by-case comments below):
 #   ctrl-a  execute-silent(__toggle-filter)+reload+transform-prompt
 #   ctrl-s  execute-silent(__cycle-scope)+reload+transform-prompt
 #   ctrl-o  execute-silent(__open {8})
 #   ctrl-r  reload(__render)
-#   ctrl-g  execute(__use-global {+1}; __pause)+reload(__render)
+#   ctrl-g/t/x/u  execute(<handler> {+1}; __pause)+reload(__render) — see below
 #
-# ctrl-g was undriveable here for a real reason, now fixed rather than worked
-# around. Its execute() ends in a pause meant to hold mise's output on
-# screen:
+# ctrl-g/t/x/u were once undriveable here for a real reason that has since
+# been fixed, not worked around. All four end their execute() in a pause meant
+# to hold mise's output on screen:
 #   execute(<cmd> {+1}; echo; read -r -p "Press enter to continue..." _dummy)+reload(...)
 # Two independent bugs made the pause never pause, so the whole execute()+
 # reload() cycle finished in the same instant it started, with nothing to
@@ -48,15 +48,35 @@
 #      vise::render's pipe into fzf already left at EOF, so even under bash a
 #      plain `read` with no redirect returns instantly too.
 #
-# Fixed by routing the pause through vise::pause, dispatched as a real
-# `__pause` subcommand rather than inlined in the bind string: invoking
-# `vise __pause` always execs vise's own bash, sidestepping (1) regardless of
-# $SHELL, and vise::pause's `read ... </dev/tty` fixes (2) by reading the
-# controlling terminal instead of the inherited pipe. See vise::pause's
-# comment in vise for the by-the-numbers version.
+# Fixed by routing the pause through vise::pause, dispatched as a real `__pause`
+# subcommand rather than inlined in the bind string: invoking `vise __pause`
+# always execs vise's own bash, sidestepping (1) regardless of $SHELL, and
+# vise::pause's `read ... </dev/tty` fixes (2) by reading the controlling
+# terminal instead of the inherited pipe. See vise::pause's comment in vise
+# for the by-the-numbers version.
 #
-# ctrl-t/ctrl-x/ctrl-u share this exact fix — one $pause variable feeds all
-# four binds — but aren't test-covered yet; that's the next commit.
+# Once the pause actually blocks, it is a genuine synchronization point — it
+# waits indefinitely, so "still on screen after a full second with no
+# keypress" is a real assertion, not a lucky sample — which is what makes the
+# rest of this file's ctrl-g/t/x/u cases possible: the right coordinate
+# reaching the DRY line, {+1} vs {1} under multi-select (killed per bind
+# below), and +reload(__render) actually re-running once Enter dismisses the
+# pause.
+#
+# The one thing that stayed unreachable even after the fix: ctrl-u on a
+# filter matching zero rows. Confirmed live, independently of vise, with a
+# bare fzf and no vise involved — bind ANY key to `execute(echo x >>marker)`
+# with {q}, {+1}, {1}, or no placeholder at all in the command: on a 0-match
+# filter, every variant WITH a placeholder never touched the marker; the one
+# with none did. This fzf version (0.74.2) skips a bound execute() outright
+# when it has no current line to substitute, rather than substituting an
+# empty string — so vise::require_selection's own refusal message is never
+# reached through this exact key press; fzf intercepts one layer further out.
+# The outcome the original bug report cared about (never a bare `mise
+# upgrade`) still holds, and is verified live in the ctrl-u zero-match case
+# below via a deterministic barrier — just not via the code path first
+# assumed. require_selection itself stays guarded by vise.smoke.sh's direct
+# `__upgrade` call with zero args, unchanged by any of this.
 #
 # Usage: bash vise.pty.sh [path-to-vise]   (defaults to ./vise beside this file)
 
@@ -484,6 +504,415 @@ if wait_for "$SESSION" "pause-tool"; then
     fi
 else
     bad "ctrl-g: picker never rendered the fixture row"
+fi
+end_session "$SESSION"
+
+# --- ctrl-g multi-select: {+1} carries EVERY selected coordinate ---------------
+# Distinguishes {+1} from {1}: {1} is the CURRENT line only and ignores
+# selection entirely (see fzf(1)'s FIELD INDEX EXPRESSION), so a regression
+# back to {1} would still fire on tab-select but silently drop everything
+# except the highlighted row. Both coordinates must reach ONE execute()
+# invocation together (mise use -g accepts a coordinate list), not two.
+CTRLG2_DIR="$BASE/ctrl-g-multi"
+mkdir -p "$CTRLG2_DIR"
+cat >"$CTRLG2_DIR/catalog.tsv" <<'EOF'
+npm:multi-g-a	multi-g-a	linter	javascript	-	-	-	-
+npm:multi-g-b	multi-g-b	linter	javascript	-	-	-	-
+EOF
+cat >"$CTRLG2_DIR/config.json" <<EOF
+[{"path": "$CTRLG2_DIR/global.toml", "tools": []}]
+EOF
+echo '{}' >"$CTRLG2_DIR/ls.json"
+echo '[]' >"$CTRLG2_DIR/registry.json"
+cat >"$CTRLG2_DIR/launch.sh" <<EOF
+#!/bin/bash
+export VISE_DRY_RUN=1
+export VISE_CATALOG="$CTRLG2_DIR/catalog.tsv"
+export VISE_CONFIG_JSON="$CTRLG2_DIR/config.json"
+export VISE_LS_JSON="$CTRLG2_DIR/ls.json"
+export VISE_REGISTRY_JSON="$CTRLG2_DIR/registry.json"
+export MISE_GLOBAL_CONFIG_FILE="$CTRLG2_DIR/global.toml"
+exec bash "$VISE"
+EOF
+chmod +x "$CTRLG2_DIR/launch.sh"
+
+SESSION=$(start_session "$CTRLG2_DIR/launch.sh")
+if wait_for "$SESSION" "multi-g-b"; then
+    tmux send-keys -t "$SESSION" Tab
+    tmux send-keys -t "$SESSION" Tab
+    tmux send-keys -t "$SESSION" C-g
+    if wait_for "$SESSION" "DRY: mise use -g -- npm:multi-g-a npm:multi-g-b" 30; then
+        ok "ctrl-g multi-select: {+1} carries both tab-selected coordinates to one invocation"
+    else
+        bad "ctrl-g multi-select: {+1} carries both tab-selected coordinates to one invocation" \
+            "$(tmux capture-pane -t "$SESSION" -p)"
+    fi
+    tmux send-keys -t "$SESSION" Enter
+else
+    bad "ctrl-g multi-select: picker never rendered the fixture rows"
+fi
+end_session "$SESSION"
+
+# --- ctrl-t: execute(__use-project {+1}; __pause)+reload(__render) -------------
+# Same shape as ctrl-g; the mise flag differs (no -g) — installs into the
+# project config instead of the global one.
+CTRLT_DIR="$BASE/ctrl-t"
+mkdir -p "$CTRLT_DIR"
+cat >"$CTRLT_DIR/catalog.tsv" <<'EOF'
+npm:project-pause-tool	project-pause-tool	linter	javascript	-	-	-	-
+EOF
+cat >"$CTRLT_DIR/config.json" <<EOF
+[{"path": "$CTRLT_DIR/global.toml", "tools": []}]
+EOF
+echo '{}' >"$CTRLT_DIR/ls.json"
+echo '[]' >"$CTRLT_DIR/registry.json"
+cat >"$CTRLT_DIR/launch.sh" <<EOF
+#!/bin/bash
+export VISE_DRY_RUN=1
+export VISE_CATALOG="$CTRLT_DIR/catalog.tsv"
+export VISE_CONFIG_JSON="$CTRLT_DIR/config.json"
+export VISE_LS_JSON="$CTRLT_DIR/ls.json"
+export VISE_REGISTRY_JSON="$CTRLT_DIR/registry.json"
+export MISE_GLOBAL_CONFIG_FILE="$CTRLT_DIR/global.toml"
+exec bash "$VISE"
+EOF
+chmod +x "$CTRLT_DIR/launch.sh"
+
+SESSION=$(start_session "$CTRLT_DIR/launch.sh")
+if wait_for "$SESSION" "project-pause-tool"; then
+    printf 'npm:reloaded-after-pause-t\treloaded-after-pause-t\tlinter\tjavascript\t-\t-\t-\t-\n' >>"$CTRLT_DIR/catalog.tsv"
+
+    tmux send-keys -t "$SESSION" C-t
+    if wait_for "$SESSION" "DRY: mise use -- npm:project-pause-tool" 30; then
+        ok "ctrl-t: fires with the right coordinate (DRY: mise use -- npm:project-pause-tool)"
+    else
+        bad "ctrl-t: fires with the right coordinate (DRY: mise use -- npm:project-pause-tool)" \
+            "$(tmux capture-pane -t "$SESSION" -p)"
+    fi
+
+    assert_pause_then_dismiss "$SESSION" "ctrl-t"
+
+    if wait_for "$SESSION" "reloaded-after-pause-t" 30; then
+        ok "ctrl-t: +reload(__render) re-runs after the pause returns"
+    else
+        bad "ctrl-t: +reload(__render) re-runs after the pause returns" \
+            "$(tmux capture-pane -t "$SESSION" -p)"
+    fi
+else
+    bad "ctrl-t: picker never rendered the fixture row"
+fi
+end_session "$SESSION"
+
+# --- ctrl-t multi-select: {+1} carries EVERY selected coordinate ---------------
+CTRLT2_DIR="$BASE/ctrl-t-multi"
+mkdir -p "$CTRLT2_DIR"
+cat >"$CTRLT2_DIR/catalog.tsv" <<'EOF'
+npm:multi-t-a	multi-t-a	linter	javascript	-	-	-	-
+npm:multi-t-b	multi-t-b	linter	javascript	-	-	-	-
+EOF
+cat >"$CTRLT2_DIR/config.json" <<EOF
+[{"path": "$CTRLT2_DIR/global.toml", "tools": []}]
+EOF
+echo '{}' >"$CTRLT2_DIR/ls.json"
+echo '[]' >"$CTRLT2_DIR/registry.json"
+cat >"$CTRLT2_DIR/launch.sh" <<EOF
+#!/bin/bash
+export VISE_DRY_RUN=1
+export VISE_CATALOG="$CTRLT2_DIR/catalog.tsv"
+export VISE_CONFIG_JSON="$CTRLT2_DIR/config.json"
+export VISE_LS_JSON="$CTRLT2_DIR/ls.json"
+export VISE_REGISTRY_JSON="$CTRLT2_DIR/registry.json"
+export MISE_GLOBAL_CONFIG_FILE="$CTRLT2_DIR/global.toml"
+exec bash "$VISE"
+EOF
+chmod +x "$CTRLT2_DIR/launch.sh"
+
+SESSION=$(start_session "$CTRLT2_DIR/launch.sh")
+if wait_for "$SESSION" "multi-t-b"; then
+    tmux send-keys -t "$SESSION" Tab
+    tmux send-keys -t "$SESSION" Tab
+    tmux send-keys -t "$SESSION" C-t
+    if wait_for "$SESSION" "DRY: mise use -- npm:multi-t-a npm:multi-t-b" 30; then
+        ok "ctrl-t multi-select: {+1} carries both tab-selected coordinates to one invocation"
+    else
+        bad "ctrl-t multi-select: {+1} carries both tab-selected coordinates to one invocation" \
+            "$(tmux capture-pane -t "$SESSION" -p)"
+    fi
+    tmux send-keys -t "$SESSION" Enter
+else
+    bad "ctrl-t multi-select: picker never rendered the fixture rows"
+fi
+end_session "$SESSION"
+
+# --- ctrl-x: execute(__rm {+1}; __pause)+reload(__render) -----------------------
+# The coordinate is tracked in the GLOBAL config so vise::scope_of resolves a
+# real scope and vise::rm actually calls mutate (an untracked coordinate just
+# logs "not tracked... skipping" with no DRY line — see vise::rm).
+CTRLX_DIR="$BASE/ctrl-x"
+mkdir -p "$CTRLX_DIR"
+cat >"$CTRLX_DIR/catalog.tsv" <<'EOF'
+npm:remove-pause-tool	remove-pause-tool	linter	javascript	-	-	-	-
+EOF
+cat >"$CTRLX_DIR/config.json" <<EOF
+[{"path": "$CTRLX_DIR/global.toml", "tools": ["npm:remove-pause-tool"]}]
+EOF
+cat >"$CTRLX_DIR/ls.json" <<'EOF'
+{"npm:remove-pause-tool": [{"version": "1.0.0", "active": true}]}
+EOF
+echo '[]' >"$CTRLX_DIR/registry.json"
+cat >"$CTRLX_DIR/launch.sh" <<EOF
+#!/bin/bash
+export VISE_DRY_RUN=1
+export VISE_CATALOG="$CTRLX_DIR/catalog.tsv"
+export VISE_CONFIG_JSON="$CTRLX_DIR/config.json"
+export VISE_LS_JSON="$CTRLX_DIR/ls.json"
+export VISE_REGISTRY_JSON="$CTRLX_DIR/registry.json"
+export MISE_GLOBAL_CONFIG_FILE="$CTRLX_DIR/global.toml"
+exec bash "$VISE"
+EOF
+chmod +x "$CTRLX_DIR/launch.sh"
+
+SESSION=$(start_session "$CTRLX_DIR/launch.sh")
+if wait_for "$SESSION" "remove-pause-tool"; then
+    printf 'npm:reloaded-after-pause-x\treloaded-after-pause-x\tlinter\tjavascript\t-\t-\t-\t-\n' >>"$CTRLX_DIR/catalog.tsv"
+
+    tmux send-keys -t "$SESSION" C-x
+    if wait_for "$SESSION" "DRY: mise rm -g -- npm:remove-pause-tool" 30; then
+        ok "ctrl-x: fires with the right coordinate, own scope resolved (DRY: mise rm -g -- npm:remove-pause-tool)"
+    else
+        bad "ctrl-x: fires with the right coordinate, own scope resolved (DRY: mise rm -g -- npm:remove-pause-tool)" \
+            "$(tmux capture-pane -t "$SESSION" -p)"
+    fi
+
+    assert_pause_then_dismiss "$SESSION" "ctrl-x"
+
+    if wait_for "$SESSION" "reloaded-after-pause-x" 30; then
+        ok "ctrl-x: +reload(__render) re-runs after the pause returns"
+    else
+        bad "ctrl-x: +reload(__render) re-runs after the pause returns" \
+            "$(tmux capture-pane -t "$SESSION" -p)"
+    fi
+else
+    bad "ctrl-x: picker never rendered the fixture row"
+fi
+end_session "$SESSION"
+
+# --- ctrl-x multi-select: {+1} carries EVERY selected coordinate ---------------
+# vise::rm resolves each coordinate's OWN scope and mutates per-coordinate in
+# a loop (unlike use/upgrade's single batched call — see vise::rm), so two
+# tab-selected coordinates must produce TWO separate DRY lines, not one
+# combined line.
+CTRLX2_DIR="$BASE/ctrl-x-multi"
+mkdir -p "$CTRLX2_DIR"
+cat >"$CTRLX2_DIR/catalog.tsv" <<'EOF'
+npm:multi-x-a	multi-x-a	linter	javascript	-	-	-	-
+npm:multi-x-b	multi-x-b	linter	javascript	-	-	-	-
+EOF
+cat >"$CTRLX2_DIR/config.json" <<EOF
+[{"path": "$CTRLX2_DIR/global.toml", "tools": ["npm:multi-x-a", "npm:multi-x-b"]}]
+EOF
+cat >"$CTRLX2_DIR/ls.json" <<'EOF'
+{
+  "npm:multi-x-a": [{"version": "1.0.0", "active": true}],
+  "npm:multi-x-b": [{"version": "1.0.0", "active": true}]
+}
+EOF
+echo '[]' >"$CTRLX2_DIR/registry.json"
+cat >"$CTRLX2_DIR/launch.sh" <<EOF
+#!/bin/bash
+export VISE_DRY_RUN=1
+export VISE_CATALOG="$CTRLX2_DIR/catalog.tsv"
+export VISE_CONFIG_JSON="$CTRLX2_DIR/config.json"
+export VISE_LS_JSON="$CTRLX2_DIR/ls.json"
+export VISE_REGISTRY_JSON="$CTRLX2_DIR/registry.json"
+export MISE_GLOBAL_CONFIG_FILE="$CTRLX2_DIR/global.toml"
+exec bash "$VISE"
+EOF
+chmod +x "$CTRLX2_DIR/launch.sh"
+
+SESSION=$(start_session "$CTRLX2_DIR/launch.sh")
+if wait_for "$SESSION" "multi-x-b"; then
+    tmux send-keys -t "$SESSION" Tab
+    tmux send-keys -t "$SESSION" Tab
+    tmux send-keys -t "$SESSION" C-x
+    if wait_for "$SESSION" "DRY: mise rm -g -- npm:multi-x-a" 30 &&
+        wait_for "$SESSION" "DRY: mise rm -g -- npm:multi-x-b" 5; then
+        ok "ctrl-x multi-select: {+1} carries both tab-selected coordinates, each removed on its own"
+    else
+        bad "ctrl-x multi-select: {+1} carries both tab-selected coordinates, each removed on its own" \
+            "$(tmux capture-pane -t "$SESSION" -p)"
+    fi
+    tmux send-keys -t "$SESSION" Enter
+else
+    bad "ctrl-x multi-select: picker never rendered the fixture rows"
+fi
+end_session "$SESSION"
+
+# --- ctrl-u: execute(__upgrade {+1}; __pause)+reload(__render) -----------------
+CTRLU_DIR="$BASE/ctrl-u"
+mkdir -p "$CTRLU_DIR"
+cat >"$CTRLU_DIR/catalog.tsv" <<'EOF'
+npm:upgrade-pause-tool	upgrade-pause-tool	linter	javascript	-	-	-	-
+EOF
+cat >"$CTRLU_DIR/config.json" <<EOF
+[{"path": "$CTRLU_DIR/global.toml", "tools": []}]
+EOF
+echo '{}' >"$CTRLU_DIR/ls.json"
+echo '[]' >"$CTRLU_DIR/registry.json"
+cat >"$CTRLU_DIR/launch.sh" <<EOF
+#!/bin/bash
+export VISE_DRY_RUN=1
+export VISE_CATALOG="$CTRLU_DIR/catalog.tsv"
+export VISE_CONFIG_JSON="$CTRLU_DIR/config.json"
+export VISE_LS_JSON="$CTRLU_DIR/ls.json"
+export VISE_REGISTRY_JSON="$CTRLU_DIR/registry.json"
+export MISE_GLOBAL_CONFIG_FILE="$CTRLU_DIR/global.toml"
+exec bash "$VISE"
+EOF
+chmod +x "$CTRLU_DIR/launch.sh"
+
+SESSION=$(start_session "$CTRLU_DIR/launch.sh")
+if wait_for "$SESSION" "upgrade-pause-tool"; then
+    printf 'npm:reloaded-after-pause-u\treloaded-after-pause-u\tlinter\tjavascript\t-\t-\t-\t-\n' >>"$CTRLU_DIR/catalog.tsv"
+
+    tmux send-keys -t "$SESSION" C-u
+    if wait_for "$SESSION" "DRY: mise upgrade -- npm:upgrade-pause-tool" 30; then
+        ok "ctrl-u: fires with the right coordinate (DRY: mise upgrade -- npm:upgrade-pause-tool)"
+    else
+        bad "ctrl-u: fires with the right coordinate (DRY: mise upgrade -- npm:upgrade-pause-tool)" \
+            "$(tmux capture-pane -t "$SESSION" -p)"
+    fi
+
+    assert_pause_then_dismiss "$SESSION" "ctrl-u"
+
+    if wait_for "$SESSION" "reloaded-after-pause-u" 30; then
+        ok "ctrl-u: +reload(__render) re-runs after the pause returns"
+    else
+        bad "ctrl-u: +reload(__render) re-runs after the pause returns" \
+            "$(tmux capture-pane -t "$SESSION" -p)"
+    fi
+else
+    bad "ctrl-u: picker never rendered the fixture row"
+fi
+end_session "$SESSION"
+
+# --- ctrl-u multi-select: {+1} carries EVERY selected coordinate ---------------
+CTRLU2_DIR="$BASE/ctrl-u-multi"
+mkdir -p "$CTRLU2_DIR"
+cat >"$CTRLU2_DIR/catalog.tsv" <<'EOF'
+npm:multi-u-a	multi-u-a	linter	javascript	-	-	-	-
+npm:multi-u-b	multi-u-b	linter	javascript	-	-	-	-
+EOF
+cat >"$CTRLU2_DIR/config.json" <<EOF
+[{"path": "$CTRLU2_DIR/global.toml", "tools": []}]
+EOF
+echo '{}' >"$CTRLU2_DIR/ls.json"
+echo '[]' >"$CTRLU2_DIR/registry.json"
+cat >"$CTRLU2_DIR/launch.sh" <<EOF
+#!/bin/bash
+export VISE_DRY_RUN=1
+export VISE_CATALOG="$CTRLU2_DIR/catalog.tsv"
+export VISE_CONFIG_JSON="$CTRLU2_DIR/config.json"
+export VISE_LS_JSON="$CTRLU2_DIR/ls.json"
+export VISE_REGISTRY_JSON="$CTRLU2_DIR/registry.json"
+export MISE_GLOBAL_CONFIG_FILE="$CTRLU2_DIR/global.toml"
+exec bash "$VISE"
+EOF
+chmod +x "$CTRLU2_DIR/launch.sh"
+
+SESSION=$(start_session "$CTRLU2_DIR/launch.sh")
+if wait_for "$SESSION" "multi-u-b"; then
+    tmux send-keys -t "$SESSION" Tab
+    tmux send-keys -t "$SESSION" Tab
+    tmux send-keys -t "$SESSION" C-u
+    if wait_for "$SESSION" "DRY: mise upgrade -- npm:multi-u-a npm:multi-u-b" 30; then
+        ok "ctrl-u multi-select: {+1} carries both tab-selected coordinates to one invocation"
+    else
+        bad "ctrl-u multi-select: {+1} carries both tab-selected coordinates to one invocation" \
+            "$(tmux capture-pane -t "$SESSION" -p)"
+    fi
+    tmux send-keys -t "$SESSION" Enter
+else
+    bad "ctrl-u multi-select: picker never rendered the fixture rows"
+fi
+end_session "$SESSION"
+
+# --- ctrl-u zero-match: the regression this whole hardening effort started from ---
+# The historical bug: {+1} expands to nothing on a filter matching zero rows,
+# and an unguarded zero-arg `mise upgrade` upgrades EVERY installed tool
+# instead of nothing. vise::require_selection exists to refuse that — see
+# vise.smoke.sh's "empty upgrade refuses" case, which drives it directly.
+#
+# Verified LIVE here, but the mechanism is not the one originally expected:
+# this fzf version (0.74.2) never invokes __upgrade at all in this state, so
+# require_selection's own "no tool selected, refusing to upgrade" message is
+# not observable through this exact key press — fzf intercepts it first, one
+# layer further out. Confirmed independently of vise, with a bare fzf and NO
+# vise involved: `execute(echo x >>marker)` bound to ANY key, with {q}, {+1},
+# {1} or no placeholder at all in the command, on a 0-match filter — every
+# variant WITH a placeholder never touched the marker file; the one with NO
+# placeholder did. fzf skips a bound action outright when it has no current
+# line to substitute, rather than substituting an empty string. So the
+# specific message this task set out to observe live cannot appear on this
+# fzf version — not because vise regressed, but because the outer layer never
+# hands it the chance to fire. The outcome the task actually cares about
+# ("must refuse... rather than expanding to a bare mise upgrade") still holds,
+# for a stronger reason: verified below via a deterministic barrier (clearing
+# the query is a separate key event fzf can only process once ctrl-u's own
+# bound actions — execute() and reload() — have both fully finished, so
+# "no DRY: line by the time the row reappears" is not a race).
+#
+# No mutant kills this one: since fzf itself now short-circuits the {+1}
+# expansion before vise ever runs, no bind-string or vise::upgrade mutation
+# changes this test's outcome — the outcome is invariant to what's on the
+# vise side of that boundary. require_selection's own guard is still killed
+# by vise.smoke.sh's direct-invocation test; the {+1}->{1} mutant that would
+# matter here is already killed by ctrl-u's multi-select case above.
+CTRLU0_DIR="$BASE/ctrl-u-zero-match"
+mkdir -p "$CTRLU0_DIR"
+cat >"$CTRLU0_DIR/catalog.tsv" <<'EOF'
+npm:lonely-tool	lonely-tool	linter	javascript	-	-	-	-
+EOF
+cat >"$CTRLU0_DIR/config.json" <<EOF
+[{"path": "$CTRLU0_DIR/global.toml", "tools": []}]
+EOF
+echo '{}' >"$CTRLU0_DIR/ls.json"
+echo '[]' >"$CTRLU0_DIR/registry.json"
+cat >"$CTRLU0_DIR/launch.sh" <<EOF
+#!/bin/bash
+export VISE_DRY_RUN=1
+export VISE_CATALOG="$CTRLU0_DIR/catalog.tsv"
+export VISE_CONFIG_JSON="$CTRLU0_DIR/config.json"
+export VISE_LS_JSON="$CTRLU0_DIR/ls.json"
+export VISE_REGISTRY_JSON="$CTRLU0_DIR/registry.json"
+export MISE_GLOBAL_CONFIG_FILE="$CTRLU0_DIR/global.toml"
+exec bash "$VISE"
+EOF
+chmod +x "$CTRLU0_DIR/launch.sh"
+
+SESSION=$(start_session "$CTRLU0_DIR/launch.sh")
+if wait_for "$SESSION" "lonely-tool"; then
+    QUERY="zzznomatchzzz"
+    tmux send-keys -t "$SESSION" "$QUERY"
+    if wait_for "$SESSION" "0/1 (0)" 30; then
+        tmux send-keys -t "$SESSION" C-u
+        tmux send-keys -t "$SESSION" -N "${#QUERY}" BSpace
+        if wait_for "$SESSION" "lonely-tool" 30; then
+            if ! tmux capture-pane -t "$SESSION" -p -S -200 2>/dev/null | grep -qF "DRY:"; then
+                ok "ctrl-u zero-match: never invokes mise upgrade (not 'upgrade everything')"
+            else
+                bad "ctrl-u zero-match: never invokes mise upgrade (not 'upgrade everything')" \
+                    "$(tmux capture-pane -t "$SESSION" -p -S -200)"
+            fi
+        else
+            bad "ctrl-u zero-match: never invokes mise upgrade (not 'upgrade everything')" \
+                "clearing the query never restored the row (barrier itself failed)"
+        fi
+    else
+        bad "ctrl-u zero-match: never invokes mise upgrade (not 'upgrade everything')" "filter never reached 0 matches"
+    fi
+else
+    bad "ctrl-u zero-match: picker never rendered the fixture row"
 fi
 end_session "$SESSION"
 
