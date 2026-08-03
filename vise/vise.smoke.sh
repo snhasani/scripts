@@ -851,5 +851,24 @@ else
     bad "doctor: duplicate coordinate catches two names sharing one coordinate" "rc=$rc out=[$out]"
 fi
 
+# 4. duplicate name: regression guard (0 today in the real catalog) — two
+# different coordinates sharing one name would confuse the picker's join.
+DUPNAME_CATALOG="$(mktemp -d "$DOCTOR_DIR/dupname.XXXXXX")/catalog.tsv"
+cat >"$DUPNAME_CATALOG" <<'EOF'
+npm:unique-tool	unique-tool	linter	javascript	-	-	-	-
+cargo:first-coord	same-name	linter	rust	-	-	-	-
+go:second-coord	same-name	linter	go	-	-	-	-
+EOF
+out=$(VISE_CATALOG="$DUPNAME_CATALOG" VISE_REGISTRY_JSON="$DOCTOR_EMPTY_REGISTRY" \
+    VISE_OVERRIDES="$DOCTOR_EMPTY_OVERRIDES" bash "$VISE" doctor 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q 'duplicate name' &&
+    printf '%s\n' "$out" | grep -q 'same-name' &&
+    ! printf '%s\n' "$out" | grep -q 'unique-tool'; then
+    ok "doctor: duplicate name catches two coordinates sharing one name"
+else
+    bad "doctor: duplicate name catches two coordinates sharing one name" "rc=$rc out=[$out]"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
