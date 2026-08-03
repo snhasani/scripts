@@ -856,35 +856,37 @@ vise::doctor_dup_name() {
 
 # A bare coordinate (no "backend:" prefix) only resolves through mise's own
 # shorthand table; one absent from it installs nothing and fails silently.
+#
+# comm over two pre-sorted lists, not a per-coordinate grep loop: ~535 rows
+# means dozens of bare coordinates, and a subprocess per one blew doctor's
+# 200ms budget on its own (measured: ~120ms for this check alone).
 vise::doctor_dead_shorthand() {
-    local catalog="$1" shorts="$2" bare coord rc=0
+    local catalog="$1" shorts="$2" bare missing coord
     bare=$(awk -F'\t' '!/^[[:space:]]*(#|$)/ && $1 !~ /:/ {print $1}' "$catalog" | sort -u)
     [[ -z "$bare" ]] && return 0
+    missing=$(comm -23 <(printf '%s\n' "$bare") <(sort -u <<<"$shorts"))
+    [[ -z "$missing" ]] && return 0
     while IFS= read -r coord; do
         [[ -z "$coord" ]] && continue
-        if ! grep -qxF "$coord" <<<"$shorts"; then
-            printf 'vise: doctor: dead shorthand: %s has no ":" and is not a mise registry shorthand\n' "$coord"
-            rc=1
-        fi
-    done <<<"$bare"
-    return "$rc"
+        printf 'vise: doctor: dead shorthand: %s has no ":" and is not a mise registry shorthand\n' "$coord"
+    done <<<"$missing"
+    return 1
 }
 
 # `unavailable:` means "Mason lists it, mise has no backend" as of the last
 # sync. If mise's registry now has a shorthand for that exact name, the
 # exclusion is stale and the row is installable after all.
 vise::doctor_wrongly_excluded() {
-    local catalog="$1" shorts="$2" names name rc=0
+    local catalog="$1" shorts="$2" names hits name
     names=$(awk -F'\t' '!/^[[:space:]]*(#|$)/ && $1 ~ /^unavailable:/ {print $2}' "$catalog" | sort -u)
     [[ -z "$names" ]] && return 0
+    hits=$(comm -12 <(printf '%s\n' "$names") <(sort -u <<<"$shorts"))
+    [[ -z "$hits" ]] && return 0
     while IFS= read -r name; do
         [[ -z "$name" ]] && continue
-        if grep -qxF "$name" <<<"$shorts"; then
-            printf 'vise: doctor: wrongly excluded: %s is marked unavailable but mise has a shorthand for it\n' "$name"
-            rc=1
-        fi
-    done <<<"$names"
-    return "$rc"
+        printf 'vise: doctor: wrongly excluded: %s is marked unavailable but mise has a shorthand for it\n' "$name"
+    done <<<"$hits"
+    return 1
 }
 
 # vise::sync merges catalog-overrides.tsv onto the Mason-derived base by
