@@ -783,13 +783,69 @@ else
         "rc=$rc3 out=[$scope_out3]"
 fi
 
-# vise::preview is explicitly OUT OF SCOPE for the seams/join tests above.
-# It calls `mise ls "$coord" 2>/dev/null || true` directly and unseamed — and
-# that `|| true` swallows a missing-mise "command not found" (127) the exact
-# same way it swallows a genuine "not installed" empty result, so a
-# PATH-stripped __preview run would misreport (not installed) as if it were a
-# real, verified result. Do not assume the PATH-stripping trick above proves
-# __preview is hermetic too — it isn't, and it doesn't.
+# --- vise::preview: seam VISE_PREVIEW_LS_TEXT --------------------------------
+# vise::preview's own `mise ls -- "$coord" 2>/dev/null || true` used to
+# swallow a missing-mise "command not found" (127) identically to a genuine
+# "installed nothing" empty result — both rendered "(not installed)", so the
+# PATH-stripping trick used for vise::render's seams above proved nothing
+# here: a PATH-stripped __preview run silently reproduced the real
+# not-installed case's exact text, a green assertion about a red condition.
+# VISE_PREVIEW_LS_TEXT is a new seam — a fixture file of PLAIN TEXT (`mise ls`
+# without `--json` has a different shape than VISE_LS_JSON's fixtures) —
+# standing in for that one call, at that one call site, same naming/wiring
+# convention as the three seams above. All four cases below share one set of
+# preview args so only the ls-derived tail of the output can differ between
+# them.
+preview_args() {
+    bash "$VISE" __preview "$1" none "○ preview-fixture" formatter misc - - - - - 2>&1
+}
+PREVIEW_SEAM_DIR="$(mktemp -d "$BASE/preview-seam.XXXXXX")"
+
+# 1. non-empty fixture: the seam's content becomes the preview's tail
+# verbatim, with mise unreachable on PATH throughout.
+PREVIEW_LS_TEXT="$PREVIEW_SEAM_DIR/ls-installed.txt"
+cat >"$PREVIEW_LS_TEXT" <<'EOF'
+preview-fixture  9.9.9  ~/.config/mise/config.toml  9.9.9
+EOF
+out=$(cd "$REPO_ROOT" && PATH="$NO_MISE_PATH" VISE_PREVIEW_LS_TEXT="$PREVIEW_LS_TEXT" preview_args preview-fixture)
+if printf '%s\n' "$out" | grep -qF 'preview-fixture  9.9.9'; then
+    ok "VISE_PREVIEW_LS_TEXT stands in for mise ls -- <coord> (no real mise on PATH)"
+else
+    bad "VISE_PREVIEW_LS_TEXT stands in for mise ls -- <coord> (no real mise on PATH)" "$out"
+fi
+
+# 2. empty fixture: "mise ran, found nothing installed" is now reachable
+# hermetically too, with no real mise binary involved at all.
+PREVIEW_LS_EMPTY="$PREVIEW_SEAM_DIR/ls-empty.txt"
+: >"$PREVIEW_LS_EMPTY"
+empty_out=$(cd "$REPO_ROOT" && PATH="$NO_MISE_PATH" VISE_PREVIEW_LS_TEXT="$PREVIEW_LS_EMPTY" preview_args preview-fixture)
+if printf '%s\n' "$empty_out" | grep -qx '(not installed)'; then
+    ok "VISE_PREVIEW_LS_TEXT empty fixture reports (not installed), hermetically"
+else
+    bad "VISE_PREVIEW_LS_TEXT empty fixture reports (not installed), hermetically" "$empty_out"
+fi
+
+# 3. THE mutant this slice exists to kill: same coordinate, same args, seam
+# UNSET, mise genuinely missing from PATH. Before this slice's preview change,
+# this reproduced case 2's "(not installed)" text byte-for-byte — a green
+# hermeticity assertion that would have proven nothing. It must differ now,
+# and must go red again if preview ever regresses to swallowing 127 silently.
+missing_out=$(cd "$REPO_ROOT" && PATH="$NO_MISE_PATH" preview_args preview-fixture)
+if [ "$missing_out" != "$empty_out" ] && ! printf '%s\n' "$missing_out" | grep -qx '(not installed)'; then
+    ok "preview: mise missing from PATH renders differently from genuine not-installed"
+else
+    bad "preview: mise missing from PATH renders differently from genuine not-installed" "$missing_out"
+fi
+
+# 4. control: mise genuinely reachable, seam unset, a real uninstalled
+# coordinate (the alejandra fixture from the top of this file) — the genuine
+# not-installed case's user-visible text must be untouched by this slice.
+real_out=$(cd "$REPO_ROOT" && preview_args "$FIXTURE_COORD")
+if printf '%s\n' "$real_out" | grep -qx '(not installed)'; then
+    ok "preview: genuine not-installed still reports (not installed) with real mise reachable"
+else
+    bad "preview: genuine not-installed still reports (not installed) with real mise reachable" "$real_out"
+fi
 
 # --- override merge: seam parity ---------------------------------------------
 # vise::merge_overrides is vise::sync's override-merge step pulled out into

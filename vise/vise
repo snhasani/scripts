@@ -120,9 +120,10 @@ ENVIRONMENT
   VISE_NO_GH=1         skip GitHub stars/last-push during sync
 
 TEST SEAMS (not for interactive use — fixture files stand in for mise, see vise.smoke.sh)
-  VISE_CONFIG_JSON=PATH    replaces `mise config ls --json`
-  VISE_LS_JSON=PATH        replaces `mise ls --json`
-  VISE_REGISTRY_JSON=PATH  replaces `mise registry --json`
+  VISE_CONFIG_JSON=PATH      replaces `mise config ls --json`
+  VISE_LS_JSON=PATH          replaces `mise ls --json`
+  VISE_REGISTRY_JSON=PATH    replaces `mise registry --json`
+  VISE_PREVIEW_LS_TEXT=PATH  replaces `mise ls -- <coord>` in the preview pane (plain text, not JSON)
 
 FILES
   catalog.tsv            generated, the default. Rebuild with: vise sync
@@ -574,10 +575,24 @@ vise::preview() {
         [[ "$updated" != "-" ]] && vise::field "last push" "$updated"
     fi
 
-    local ls_out
-    ls_out=$(mise ls -- "$coord" 2>/dev/null || true)
+    # ls_rc is captured separately from the `|| true` that used to guard this
+    # call: that pattern discarded mise's exit status entirely, so a missing
+    # mise (127, "command not found") rendered the identical "(not installed)"
+    # text as a genuine empty result. VISE_PREVIEW_LS_TEXT stands in for the
+    # call itself (mirrors VISE_CONFIG_JSON/VISE_LS_JSON/VISE_REGISTRY_JSON,
+    # but plain text — `mise ls` without `--json` has a different shape) and
+    # always counts as a successful run, so a fixture can represent "mise ran,
+    # found nothing installed" without needing a real mise ever near it.
+    local ls_out ls_rc=0
+    if [[ -n "${VISE_PREVIEW_LS_TEXT:-}" ]]; then
+        ls_out=$(cat "$VISE_PREVIEW_LS_TEXT")
+    else
+        ls_out=$(mise ls -- "$coord" 2>/dev/null) || ls_rc=$?
+    fi
     printf '\n%s\n' "$(printf '─%.0s' $(seq 1 "$width"))"
-    if [[ -z "$ls_out" ]]; then
+    if ((ls_rc != 0)); then
+        echo "(could not verify: mise ls failed)"
+    elif [[ -z "$ls_out" ]]; then
         echo "(not installed)"
     else
         printf '%s\n' "$ls_out"

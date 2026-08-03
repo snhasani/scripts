@@ -128,6 +128,9 @@ matching `mise ... --json` call, used by `vise.smoke.sh`:
 - `VISE_CONFIG_JSON=<path>` — replaces `mise config ls --json`.
 - `VISE_LS_JSON=<path>` — replaces `mise ls --json`.
 - `VISE_REGISTRY_JSON=<path>` — replaces `mise registry --json`.
+- `VISE_PREVIEW_LS_TEXT=<path>` — replaces `mise ls -- <coord>` inside the
+  preview pane. Plain text, not JSON — `mise ls` without `--json` has a
+  different shape than `VISE_LS_JSON`'s fixtures.
 
 ## Install
 
