@@ -917,6 +917,49 @@ vise::doctor_dead_override() {
     ' "$catalog"
 }
 
+# A grab-bag of shapes that have broken a coordinate before: a literal %40
+# (an @ that never got url-decoded), stray whitespace, a doubled or
+# leading/trailing colon, a version PURL-parsing forgot to strip, and a
+# github: coordinate that isn't exactly owner/repo. An npm scope's own
+# leading "@" (npm:@angular/language-server) is not this bug — only an "@"
+# AFTER the identifier, followed by something version-shaped, is.
+vise::doctor_coord_syntax() {
+    local catalog="$1"
+    awk -F'\t' '
+        !/^[[:space:]]*(#|$)/ {
+            c = $1
+            if (index(c, "%40") > 0) {
+                printf "vise: doctor: coord syntax: %s contains a literal %%40\n", c; bad = 1
+            }
+            if (c ~ /[ \t]/) {
+                printf "vise: doctor: coord syntax: %s contains whitespace\n", c; bad = 1
+            }
+            if (index(c, "::") > 0) {
+                printf "vise: doctor: coord syntax: %s contains a double colon\n", c; bad = 1
+            }
+            if (c ~ /^:/ || c ~ /:$/) {
+                printf "vise: doctor: coord syntax: %s has a leading or trailing colon\n", c; bad = 1
+            }
+            rest = c
+            sub(/^[^:]*:/, "", rest)
+            if (rest ~ /@/ && substr(rest, 1, 1) != "@") {
+                n = split(rest, parts, "@")
+                if (parts[n] ~ /^v?[0-9]/) {
+                    printf "vise: doctor: coord syntax: %s has a leftover @version suffix\n", c; bad = 1
+                }
+            }
+            if (c ~ /^github:/) {
+                gh = c
+                sub(/^github:/, "", gh)
+                if (split(gh, gp, "/") != 2) {
+                    printf "vise: doctor: coord syntax: %s is a github: coordinate without exactly one slash\n", c; bad = 1
+                }
+            }
+        }
+        END { exit bad }
+    ' "$catalog"
+}
+
 vise::doctor() {
     local catalog="$CATALOG_FILE" rc=0
     if [[ ! -r "$catalog" ]]; then
@@ -939,6 +982,7 @@ vise::doctor() {
     vise::doctor_dead_shorthand "$catalog" "$shorts" || rc=1
     vise::doctor_wrongly_excluded "$catalog" "$shorts" || rc=1
     vise::doctor_dead_override "$catalog" "$OVERRIDES_FILE" || rc=1
+    vise::doctor_coord_syntax "$catalog" || rc=1
 
     return "$rc"
 }
