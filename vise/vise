@@ -870,6 +870,23 @@ vise::doctor_dead_shorthand() {
     return "$rc"
 }
 
+# `unavailable:` means "Mason lists it, mise has no backend" as of the last
+# sync. If mise's registry now has a shorthand for that exact name, the
+# exclusion is stale and the row is installable after all.
+vise::doctor_wrongly_excluded() {
+    local catalog="$1" shorts="$2" names name rc=0
+    names=$(awk -F'\t' '!/^[[:space:]]*(#|$)/ && $1 ~ /^unavailable:/ {print $2}' "$catalog" | sort -u)
+    [[ -z "$names" ]] && return 0
+    while IFS= read -r name; do
+        [[ -z "$name" ]] && continue
+        if grep -qxF "$name" <<<"$shorts"; then
+            printf 'vise: doctor: wrongly excluded: %s is marked unavailable but mise has a shorthand for it\n' "$name"
+            rc=1
+        fi
+    done <<<"$names"
+    return "$rc"
+}
+
 vise::doctor() {
     local catalog="$CATALOG_FILE" rc=0
     if [[ ! -r "$catalog" ]]; then
@@ -890,6 +907,7 @@ vise::doctor() {
     vise::doctor_dup_coord "$catalog" || rc=1
     vise::doctor_dup_name "$catalog" || rc=1
     vise::doctor_dead_shorthand "$catalog" "$shorts" || rc=1
+    vise::doctor_wrongly_excluded "$catalog" "$shorts" || rc=1
 
     return "$rc"
 }
