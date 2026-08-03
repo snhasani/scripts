@@ -823,6 +823,22 @@ vise::doctor_empty_fields() {
     ' "$catalog"
 }
 
+# The one confirmed bug (spec item 3): an override-merge collision stamps one
+# coordinate onto two rows under different names. Names sharing the
+# coordinate are listed so the report points straight at the collision.
+vise::doctor_dup_coord() {
+    local catalog="$1" dups coord names rc=0
+    dups=$(awk -F'\t' '!/^[[:space:]]*(#|$)/ {print $1}' "$catalog" | sort | uniq -d)
+    [[ -z "$dups" ]] && return 0
+    while IFS= read -r coord; do
+        [[ -z "$coord" ]] && continue
+        names=$(awk -F'\t' -v c="$coord" '$1 == c {print $2}' "$catalog" | paste -sd, -)
+        printf 'vise: doctor: duplicate coordinate: %s (%s)\n' "$coord" "$names"
+        rc=1
+    done <<<"$dups"
+    return "$rc"
+}
+
 vise::doctor() {
     local catalog="$CATALOG_FILE" rc=0
     if [[ ! -r "$catalog" ]]; then
@@ -832,6 +848,7 @@ vise::doctor() {
 
     vise::doctor_columns "$catalog" || rc=1
     vise::doctor_empty_fields "$catalog" || rc=1
+    vise::doctor_dup_coord "$catalog" || rc=1
 
     return "$rc"
 }
