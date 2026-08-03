@@ -26,6 +26,11 @@
 
 set -euo pipefail
 
+if ((BASH_VERSINFO[0] < 5)); then
+    printf 'rig: needs bash >= 5 (found %s). macOS: brew install bash\n' "$BASH_VERSION" >&2
+    exit 1
+fi
+
 # --- constants ---------------------------------------------------------------
 CONFIG_OPEN='<!-- rig:config -->'
 CONFIG_CLOSE='<!-- /rig:config -->'

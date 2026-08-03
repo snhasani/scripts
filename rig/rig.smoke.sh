@@ -103,6 +103,25 @@ else
     bad "count(): zero matches in an existing file returns a single 0" "[$z]"
 fi
 
+# --- version floor: bash >= 5 required ---------------------------------------
+# triage_yaml's ${role^^} needs bash 4+; under bash 3.2 it fails at runtime
+# with "bad substitution" INSIDE the $(...) that builds the config block, so
+# the block still gets written — just silently missing every triage role,
+# with no error surfaced to the user. Worse than a crash: a hard guard up
+# front turns that into a clear, visible refusal instead.
+if [ -x /bin/bash ] && ! /bin/bash -c '((BASH_VERSINFO[0] >= 5))' 2>/dev/null; then
+    vfrepo="$(fresh_repo)"
+    out=$(cd "$vfrepo" && /bin/bash "$RIG" --yes --dry-run </dev/null 2>&1)
+    rc=$?
+    if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -qF 'rig: needs bash >= 5'; then
+        ok "version floor: /bin/bash (< 5) refuses with a clear message, not a silent data loss"
+    else
+        bad "version floor: /bin/bash (< 5) refuses with a clear message, not a silent data loss" "rc=$rc out=[$out]"
+    fi
+else
+    printf '  \033[33mskip\033[0m version floor (/bin/bash is already >= 5 or absent)\n'
+fi
+
 # --- fresh repo, one headless run --------------------------------------------
 repo="$(fresh_repo)"
 (cd "$repo" && bash "$RIG" --yes </dev/null >/dev/null 2>&1)
