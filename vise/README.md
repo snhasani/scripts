@@ -107,6 +107,27 @@ separate, opt-in mode.
 `mise run test` runs `vise doctor` after the smoke suite, so a broken
 catalog fails the repo's test task even when every smoke assertion passes.
 
+### `vise.pty.sh` — the fzf key bindings themselves
+
+`vise.smoke.sh` drives every `__*` handler directly; it never presses a real
+key inside a real fzf process, so fzf's own `{+1}`/`{1}..{10}` placeholder
+expansion, `execute()` vs `execute-silent()`, and `reload()`/`transform-
+prompt()` chaining were never exercised end-to-end — exactly where the
+empty-selection bulk-upgrade bug lived. `vise.pty.sh` opens the real picker
+inside a real `tmux` pty and presses keys.
+
+Covered, each with a killed mutant: `ctrl-a`, `ctrl-s`, `ctrl-o`, `ctrl-r`.
+NOT covered: `ctrl-g`/`ctrl-t`/`ctrl-x`/`ctrl-u` — see the file's header
+comment for why (in short: their `execute()` bodies end in a blocking
+`read -r -p "Press enter to continue..."`, and under `VISE_DRY_RUN=1` the
+whole execute-then-reload cycle completes faster than tmux's pty parser
+produces an externally observable intermediate frame — confirmed
+deterministic, not flaky, across dozens of trials).
+
+Not run by `mise run test` — starts a real fzf per case, an order of
+magnitude slower than the rest of the suite, and needs `tmux` + `fzf`
+installed. Opt in with `mise run test-pty` or `bash vise/vise.pty.sh`.
+
 ## Env
 
 - `VISE_DRY_RUN=1` — print mise commands instead of running them.
