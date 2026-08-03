@@ -812,6 +812,17 @@ vise::doctor_columns() {
 # each check is its own function so a broken predicate reddens exactly one
 # smoke test instead of the whole subcommand. Silent + exit 0 on a clean
 # catalog; otherwise every violation is printed and the exit code says so.
+vise::doctor_empty_fields() {
+    local catalog="$1"
+    awk -F'\t' '
+        /^[[:space:]]*(#|$)/ { next }
+        $1 == "" || $2 == "" || $3 == "" || $4 == "" {
+            printf "vise: doctor: empty field: %s\n", $0; bad = 1
+        }
+        END { exit bad }
+    ' "$catalog"
+}
+
 vise::doctor() {
     local catalog="$CATALOG_FILE" rc=0
     if [[ ! -r "$catalog" ]]; then
@@ -820,6 +831,7 @@ vise::doctor() {
     fi
 
     vise::doctor_columns "$catalog" || rc=1
+    vise::doctor_empty_fields "$catalog" || rc=1
 
     return "$rc"
 }

@@ -818,5 +818,18 @@ else
     bad "doctor: column count catches a row with the wrong field count" "rc=$rc out=[$out]"
 fi
 
+# 2. empty field: coordinate/name/kind/language ($1..$4) must not be blank.
+EMPTY_CATALOG="$(mktemp -d "$DOCTOR_DIR/empty.XXXXXX")/catalog.tsv"
+printf 'npm:good-tool\tgood-tool\tlinter\tjavascript\thttps://example.com/good\t1\t2026-01-01\tA good row\n\tno-coord\tlinter\tjavascript\t-\t-\t-\t-\n' >"$EMPTY_CATALOG"
+out=$(VISE_CATALOG="$EMPTY_CATALOG" VISE_REGISTRY_JSON="$DOCTOR_EMPTY_REGISTRY" \
+    VISE_OVERRIDES="$DOCTOR_EMPTY_OVERRIDES" bash "$VISE" doctor 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q 'empty field' &&
+    printf '%s\n' "$out" | grep -q 'no-coord'; then
+    ok "doctor: empty field catches a blank coordinate"
+else
+    bad "doctor: empty field catches a blank coordinate" "rc=$rc out=[$out]"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
