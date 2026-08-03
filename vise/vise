@@ -1147,13 +1147,27 @@ vise::doctor() {
     return "$rc"
 }
 
+# fzf's execute() runs its command via "$SHELL -c" (see COMMAND EXECUTION in
+# fzf(1)), so the pause can't be inlined as a bare `read -r -p` in the bind
+# string: under a zsh login shell, zsh's `read -p` means "read from a
+# coprocess", not "print a prompt", and errors out instead of blocking —
+# regardless of what $SHELL happens to be, __pause is a real vise subcommand
+# and always runs under THIS script's own bash. `</dev/tty` matters
+# independently of that: execute()'s child still inherits fzf's OWN stdin —
+# the pipe vise::render was piped through, already at EOF — so an
+# unredirected read would return instantly even under bash.
+vise::pause() {
+    echo
+    read -r -p "Press enter to continue..." _dummy </dev/tty
+}
+
 vise::tui() {
     local self_q
     self_q=${SELF@Q}
 
     # execute() switches to the alt screen and switches straight back once the
     # command exits, so a mise error would flash and vanish without this pause.
-    local pause='; echo; read -r -p "Press enter to continue..." _dummy'
+    local pause="; ${self_q} __pause"
 
     # ctrl-a's toggle state lives in this file (see vise::toggle_filter):
     # fzf binds run in fresh subshells and can't mutate this process's
@@ -1287,6 +1301,9 @@ __toggle-filter)
     ;;
 __cycle-scope)
     vise::cycle_scope
+    ;;
+__pause)
+    vise::pause
     ;;
 __prompt)
     vise::prompt
