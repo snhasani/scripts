@@ -672,15 +672,26 @@ vise::sync_body() {
 #
 # The overrides file wins on coordinate/kind/language: it holds hand-verified
 # install paths for tools whose Mason PURL points somewhere mise cannot reach
-# (jdtls, omnisharp, kotlin-language-server are "generic" upstream). A row is
-# matched to an override two ways: by NAME (the common case — the override
-# just corrects an existing row's coordinate/kind/language), or, failing
-# that, by the override's own COORDINATE already being some row's coordinate
-# (the override is renaming that row to a different name — matching by name
-# alone would miss it, leave the row untouched, and append the override's
-# coordinate below as a second, mostly blank row sharing it). An override
-# matched neither way is genuinely new and is appended as its own synthetic
-# row.
+# (jdtls, omnisharp, kotlin-language-server are "generic" upstream). A
+# coordinate is a row's identity; a name is mutable metadata. Each override is
+# resolved to AT MOST ONE base row before anything is written: match by
+# coordinate and match by name are computed independently, and the override
+# applies only where they agree (one of the two is absent, or both name the
+# same row) — coordinate unchanged, name/kind/language stamped from the
+# override for a coordinate-match; coordinate/kind/language stamped for a
+# name-match. Two former bugs lived in doing this per-row instead: matching
+# by name only meant a coordinate-only rename left the row untouched and
+# appended the override's coordinate below as a second, blank row sharing it;
+# checking coordinate as a same-row fallback (no cross-row agreement check)
+# meant an override whose name matched one row and whose coordinate happened
+# to equal a DIFFERENT row's coordinate fired on both independently, forking
+# a duplicate coordinate from the other direction. Neither reading is
+# guessable from the override alone, so a disagreement — by coordinate vs.
+# name pointing at two different rows, or two different overrides pointing at
+# one row — is reported to stderr and left unapplied (and NOT appended
+# either: appending would recreate the same collision by coordinate a second
+# way). An override matched neither way is genuinely new and is appended as
+# its own synthetic row.
 vise::merge_overrides() {
     local base="$1" overrides="$2"
     [[ -r "$overrides" ]] || overrides=/dev/null
@@ -693,22 +704,62 @@ vise::merge_overrides() {
         if (f[2] == "") continue
         n++
         ocoord[n] = f[1]; oname[n] = f[2]; okind[n] = f[3]; olang[n] = f[4]
-        byname[f[2]] = n
-        bycoord[f[1]] = n
       }
     }
-    { if ($2 in byname) {
-        i = byname[$2]
-        $1 = ocoord[i]; $3 = okind[i]; $4 = olang[i]
-        consumed[i] = 1
-      } else if ($1 in bycoord) {
-        i = bycoord[$1]
-        $2 = oname[i]; $3 = okind[i]; $4 = olang[i]
-        consumed[i] = 1
+    { m++; brow[m] = $0; bcoord[m] = $1; bname[m] = $2 }
+    END {
+      bad = 0
+      for (j = 1; j <= m; j++) { coord_row[bcoord[j]] = j; name_row[bname[j]] = j }
+
+      for (i = 1; i <= n; i++) {
+        ct = (ocoord[i] in coord_row) ? coord_row[ocoord[i]] : 0
+        nt = (oname[i] in name_row) ? name_row[oname[i]] : 0
+        if (ct != 0 && nt != 0 && ct != nt) {
+          printf "vise: merge: override %s / %s is ambiguous (name matches row at %s, coordinate matches row at %s), skipping\n", \
+            ocoord[i], oname[i], bcoord[nt], bcoord[ct] > "/dev/stderr"
+          rejected[i] = 1
+          bad = 1
+          continue
+        }
+        target[i] = (ct != 0) ? ct : nt
       }
-      print
+
+      # A row claimed by more than one surviving override is the same
+      # collision from the other direction: applying either would silently
+      # discard the other override entirely.
+      for (i = 1; i <= n; i++) {
+        if ((i in rejected) || target[i] == 0) continue
+        owners[target[i]]++
+      }
+      for (i = 1; i <= n; i++) {
+        if ((i in rejected) || target[i] == 0) continue
+        r = target[i]
+        if (owners[r] > 1) {
+          printf "vise: merge: row %s is claimed by more than one override, skipping\n", bcoord[r] > "/dev/stderr"
+          rejected[i] = 1
+          bad = 1
+        }
+      }
+      for (i = 1; i <= n; i++) {
+        if ((i in rejected) || target[i] == 0) continue
+        row_owner[target[i]] = i
+      }
+
+      for (j = 1; j <= m; j++) {
+        split(brow[j], f, "\t")
+        if (j in row_owner) {
+          i = row_owner[j]
+          f[1] = ocoord[i]; f[2] = oname[i]; f[3] = okind[i]; f[4] = olang[i]
+          consumed[i] = 1
+        }
+        print f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8]
+      }
+      for (i = 1; i <= n; i++)
+        if (!(i in rejected) && !(i in consumed))
+          print ocoord[i], oname[i], okind[i], olang[i], "-", "-", "-", "-"
+
+      exit bad
     }
-    END { for (i = 1; i <= n; i++) if (!(i in consumed)) print ocoord[i], oname[i], okind[i], olang[i], "-", "-", "-", "-" }
   ' "$base"
 }
 
