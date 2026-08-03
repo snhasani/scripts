@@ -883,6 +883,65 @@ else
     bad "merge: no two output rows share a coordinate" "$dup_coords"
 fi
 
+# --- override merge: an override ambiguous across two different base rows --
+# The double-apply bug: an override whose own COORDINATE equals one base
+# row's coordinate, while its own NAME equals a DIFFERENT base row's name,
+# used to fire the name-match branch on the first row AND the coordinate-
+# match branch on the second, independently — one row renamed onto the
+# override's coordinate, the other's coordinate rewritten to that same
+# value, landing both on it. There is no way to tell from the override alone
+# which row it meant, so neither may be touched; this must be reported, not
+# guessed.
+AMBIG_DIR="$(mktemp -d "$BASE/merge-ambiguous.XXXXXX")"
+AMBIG_BASE="$AMBIG_DIR/base.tsv"
+cat >"$AMBIG_BASE" <<'EOF'
+alpha	mytool	lsp	go	https://a	1	2026-01-01	A row
+zeta	other	lsp	go	https://b	2	2026-01-02	B row
+EOF
+AMBIG_OVERRIDES="$AMBIG_DIR/overrides.tsv"
+cat >"$AMBIG_OVERRIDES" <<'EOF'
+zeta	mytool	linter	rust
+EOF
+ambig_out=$(bash "$VISE" __merge-overrides "$AMBIG_BASE" "$AMBIG_OVERRIDES" 2>"$AMBIG_DIR/err")
+ambig_rc=$?
+ambig_dupcoord=$(printf '%s\n' "$ambig_out" | awk -F'\t' '{print $1}' | sort | uniq -d)
+if [ "$ambig_rc" -ne 0 ] && [ -z "$ambig_dupcoord" ] &&
+    printf '%s\n' "$ambig_out" | grep -qx $'alpha\tmytool\tlsp\tgo\thttps://a\t1\t2026-01-01\tA row' &&
+    printf '%s\n' "$ambig_out" | grep -qx $'zeta\tother\tlsp\tgo\thttps://b\t2\t2026-01-02\tB row' &&
+    grep -q '.' "$AMBIG_DIR/err"; then
+    ok "merge: an override ambiguous across two base rows touches neither, reports, and exits nonzero"
+else
+    bad "merge: an override ambiguous across two base rows touches neither, reports, and exits nonzero" \
+        "rc=$ambig_rc out=[$ambig_out] err=[$(cat "$AMBIG_DIR/err")]"
+fi
+
+# --- override merge: two different overrides converging on one base row ----
+# The same collision from the other direction: override A matches a row by
+# name, override B independently matches the SAME row by coordinate.
+# Whichever applied would silently discard the other's intent, so neither
+# may apply — and the row must survive untouched, not half-mutated.
+COLLIDE_DIR="$(mktemp -d "$BASE/merge-collide.XXXXXX")"
+COLLIDE_BASE="$COLLIDE_DIR/base.tsv"
+cat >"$COLLIDE_BASE" <<'EOF'
+npm:shared-coord	shared-name	linter	javascript	https://c	3	2026-01-03	C row
+EOF
+COLLIDE_OVERRIDES="$COLLIDE_DIR/overrides.tsv"
+cat >"$COLLIDE_OVERRIDES" <<'EOF'
+npm:from-name-override	shared-name	lsp	typescript
+npm:shared-coord	renamed-by-coord	lsp	typescript
+EOF
+collide_out=$(bash "$VISE" __merge-overrides "$COLLIDE_BASE" "$COLLIDE_OVERRIDES" 2>"$COLLIDE_DIR/err")
+collide_rc=$?
+collide_rows=$(printf '%s\n' "$collide_out" | grep -c .)
+if [ "$collide_rc" -ne 0 ] && [ "$collide_rows" = "1" ] &&
+    printf '%s\n' "$collide_out" | grep -qx $'npm:shared-coord\tshared-name\tlinter\tjavascript\thttps://c\t3\t2026-01-03\tC row' &&
+    grep -q '.' "$COLLIDE_DIR/err"; then
+    ok "merge: two overrides converging on one base row touch neither, report, and exit nonzero"
+else
+    bad "merge: two overrides converging on one base row touch neither, report, and exit nonzero" \
+        "rc=$collide_rc rows=$collide_rows out=[$collide_out] err=[$(cat "$COLLIDE_DIR/err")]"
+fi
+
 # --- vise doctor: offline lint over catalog.tsv --------------------------
 # Every fixture below is self-contained (own catalog, own registry, own
 # overrides) so a check's test can never pass by accident from repo state:
