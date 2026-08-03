@@ -1069,31 +1069,66 @@ else
     bad "doctor: wrongly excluded catches an unavailable row that mise can actually install" "rc=$rc out=[$out]"
 fi
 
-# 7. dead override: sync merges catalog-overrides.tsv onto the Mason-derived
-# base by name; an override whose name matches nothing there becomes a
-# synthetic row instead — homepage and description both stamped "-" (see
-# vise::sync's END block). A live override instead lands on a real Mason row,
-# which carries real metadata.
-OVERRIDE_DIR="$(mktemp -d "$DOCTOR_DIR/override.XXXXXX")"
-OVERRIDE_CATALOG="$OVERRIDE_DIR/catalog.tsv"
-cat >"$OVERRIDE_CATALOG" <<'EOF'
-dotnet:dead-tool	dead-tool	lsp	csharp	-	-	-	-
+# 7. dead override, split by coordinate: sync merges catalog-overrides.tsv
+# onto the Mason-derived base by name; an override whose name matches
+# nothing there becomes a synthetic row instead — homepage and description
+# both stamped "-" (see vise::sync's END block). That shape alone is not a
+# bug: catalog-overrides.tsv deliberately adds tools Mason never lists at
+# all (npm:eslint, npm:typescript, pipx:clang-tidy in the live catalog), and
+# every one of those is a synthetic row by design. The real bug is narrower —
+# an override's coordinate landing on one that ALREADY belongs to a
+# different row, forking it — so the check is split by whether that
+# coordinate is otherwise unique in the catalog.
+
+# 7a. brand-new coordinate: the override's synthetic row is the ONLY row at
+# that coordinate. A deliberate addition, not a bug — silent, like the 3
+# live ones above. A real (non-synthetic-shaped) override-matched row is the
+# control, same as before.
+NEWCOORD_DIR="$(mktemp -d "$DOCTOR_DIR/newcoord.XXXXXX")"
+NEWCOORD_CATALOG="$NEWCOORD_DIR/catalog.tsv"
+cat >"$NEWCOORD_CATALOG" <<'EOF'
+dotnet:brand-new-tool	brand-new-tool	lsp	csharp	-	-	-	-
 npm:live-tool	live-tool	linter	javascript	https://example.com/live	42	2026-01-01	A real Mason description
 EOF
-OVERRIDE_FILE="$OVERRIDE_DIR/overrides.tsv"
-cat >"$OVERRIDE_FILE" <<'EOF'
+NEWCOORD_FILE="$NEWCOORD_DIR/overrides.tsv"
+cat >"$NEWCOORD_FILE" <<'EOF'
+dotnet:brand-new-tool	brand-new-tool	lsp	csharp
+npm:live-tool	live-tool	linter	javascript
+EOF
+out=$(VISE_CATALOG="$NEWCOORD_CATALOG" VISE_REGISTRY_JSON="$DOCTOR_EMPTY_REGISTRY" \
+    VISE_OVERRIDES="$NEWCOORD_FILE" bash "$VISE" doctor 2>&1)
+rc=$?
+if [ "$rc" -eq 0 ] && [ -z "$out" ]; then
+    ok "doctor: dead override stays silent when the synthetic row's coordinate is new"
+else
+    bad "doctor: dead override stays silent when the synthetic row's coordinate is new" "rc=$rc out=[$out]"
+fi
+
+# 7b. forking coordinate: the override's synthetic row shares its coordinate
+# with a second, different row that already owns it — the actual bug this
+# check exists to catch.
+FORKCOORD_DIR="$(mktemp -d "$DOCTOR_DIR/forkcoord.XXXXXX")"
+FORKCOORD_CATALOG="$FORKCOORD_DIR/catalog.tsv"
+cat >"$FORKCOORD_CATALOG" <<'EOF'
+dotnet:dead-tool	dead-tool	lsp	csharp	-	-	-	-
+dotnet:dead-tool	other-name	lsp	csharp	https://example.com/other	7	2026-01-01	Already owns this coordinate
+npm:live-tool	live-tool	linter	javascript	https://example.com/live	42	2026-01-01	A real Mason description
+EOF
+FORKCOORD_FILE="$FORKCOORD_DIR/overrides.tsv"
+cat >"$FORKCOORD_FILE" <<'EOF'
 dotnet:dead-tool	dead-tool	lsp	csharp
 npm:live-tool	live-tool	linter	javascript
 EOF
-out=$(VISE_CATALOG="$OVERRIDE_CATALOG" VISE_REGISTRY_JSON="$DOCTOR_EMPTY_REGISTRY" \
-    VISE_OVERRIDES="$OVERRIDE_FILE" bash "$VISE" doctor 2>&1)
+out=$(VISE_CATALOG="$FORKCOORD_CATALOG" VISE_REGISTRY_JSON="$DOCTOR_EMPTY_REGISTRY" \
+    VISE_OVERRIDES="$FORKCOORD_FILE" bash "$VISE" doctor 2>&1)
 rc=$?
 if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q 'dead override' &&
     printf '%s\n' "$out" | grep -q 'dead-tool' &&
+    printf '%s\n' "$out" | grep -q 'forks' &&
     ! printf '%s\n' "$out" | grep -q 'live-tool'; then
-    ok "doctor: dead override catches an override that matched nothing and became a synthetic row"
+    ok "doctor: dead override errors when the synthetic row's coordinate forks an existing row"
 else
-    bad "doctor: dead override catches an override that matched nothing and became a synthetic row" "rc=$rc out=[$out]"
+    bad "doctor: dead override errors when the synthetic row's coordinate forks an existing row" "rc=$rc out=[$out]"
 fi
 
 # 8. coord syntax: several distinct malformations, one check. The npm scoped
