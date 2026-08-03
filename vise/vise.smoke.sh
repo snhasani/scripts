@@ -831,5 +831,25 @@ else
     bad "doctor: empty field catches a blank coordinate" "rc=$rc out=[$out]"
 fi
 
+# 3. duplicate coordinate: the one confirmed bug (item 3 in the spec) — an
+# override-merge collision stamps one coordinate onto two rows under
+# different names. This is the check `doctor` exists for.
+DUPCOORD_CATALOG="$(mktemp -d "$DOCTOR_DIR/dupcoord.XXXXXX")/catalog.tsv"
+cat >"$DUPCOORD_CATALOG" <<'EOF'
+npm:unique-tool	unique-tool	linter	javascript	-	-	-	-
+dotnet:same-coord	first-name	lsp	csharp	-	-	-	-
+dotnet:same-coord	second-name	lsp	csharp	-	-	-	-
+EOF
+out=$(VISE_CATALOG="$DUPCOORD_CATALOG" VISE_REGISTRY_JSON="$DOCTOR_EMPTY_REGISTRY" \
+    VISE_OVERRIDES="$DOCTOR_EMPTY_OVERRIDES" bash "$VISE" doctor 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q 'duplicate coordinate' &&
+    printf '%s\n' "$out" | grep -q 'dotnet:same-coord' &&
+    ! printf '%s\n' "$out" | grep -q 'npm:unique-tool'; then
+    ok "doctor: duplicate coordinate catches two names sharing one coordinate"
+else
+    bad "doctor: duplicate coordinate catches two names sharing one coordinate" "rc=$rc out=[$out]"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
