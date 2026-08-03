@@ -666,6 +666,34 @@ vise::sync_body() {
     ' "$CACHE_DIR/merged.tsv" | sort -t"$(printf '\t')" -k2,2f
 }
 
+# Pulled out of vise::sync so `__merge-overrides` can drive it directly with
+# fixture files — the rest of sync needs the Mason/GitHub network fetch, this
+# step doesn't.
+#
+# The overrides file wins on coordinate/kind/language: it holds hand-verified
+# install paths for tools whose Mason PURL points somewhere mise cannot reach
+# (jdtls, omnisharp, kotlin-language-server are "generic" upstream). A row is
+# matched to an override by NAME; an override matching no row is appended as
+# its own synthetic row.
+vise::merge_overrides() {
+    local base="$1" overrides="$2"
+    [[ -r "$overrides" ]] || overrides=/dev/null
+    awk -F'\t' -v OFS='\t' -v overrides="$overrides" '
+    BEGIN {
+      while ((getline line < overrides) > 0) {
+        if (line ~ /^[[:space:]]*(#|$)/) continue
+        split(line, f, "\t")
+        if (f[2] == "") continue
+        coord[f[2]] = f[1]; kind[f[2]] = f[3]; lang[f[2]] = f[4]
+      }
+    }
+    { if ($2 in coord) { $1 = coord[$2]; $3 = kind[$2]; $4 = lang[$2]; seen[$2] = 1 }
+      print
+    }
+    END { for (n in coord) if (!(n in seen)) print coord[n], n, kind[n], lang[n], "-", "-", "-", "-" }
+  ' "$base"
+}
+
 # Rebuilds catalog.tsv. The only command here that touches the network — the picker
 # itself is always offline.
 #
@@ -737,24 +765,7 @@ vise::sync() {
     vise::log "editor tools from Mason: $(wc -l <"$CACHE_DIR/base.tsv" | tr -d ' ')"
     vise::debug "unavailable (no mise backend): $(awk -F'\t' '$1 ~ /^unavailable:/' "$CACHE_DIR/base.tsv" | wc -l | tr -d ' ')"
 
-    # The overrides file wins on coordinate/kind/language: it holds
-    # hand-verified install paths for tools whose Mason PURL points somewhere
-    # mise cannot reach (jdtls, omnisharp, kotlin-language-server are
-    # "generic" upstream).
-    awk -F'\t' -v OFS='\t' -v overrides="$overrides" '
-    BEGIN {
-      while ((getline line < overrides) > 0) {
-        if (line ~ /^[[:space:]]*(#|$)/) continue
-        split(line, f, "\t")
-        if (f[2] == "") continue
-        coord[f[2]] = f[1]; kind[f[2]] = f[3]; lang[f[2]] = f[4]
-      }
-    }
-    { if ($2 in coord) { $1 = coord[$2]; $3 = kind[$2]; $4 = lang[$2]; seen[$2] = 1 }
-      print
-    }
-    END { for (n in coord) if (!(n in seen)) print coord[n], n, kind[n], lang[n], "-", "-", "-", "-" }
-  ' "$CACHE_DIR/base.tsv" >"$CACHE_DIR/merged.tsv"
+    vise::merge_overrides "$CACHE_DIR/base.tsv" "$overrides" >"$CACHE_DIR/merged.tsv"
     vise::log "after merging $overrides: $(wc -l <"$CACHE_DIR/merged.tsv" | tr -d ' ') rows"
 
     # Stars are a nice-to-have, never a hard dependency: any problem here
@@ -1191,6 +1202,12 @@ __rm)
 # without a real sync. First arg is <dest>, the rest is the producer command.
 __write-atomic)
     vise::write_atomic ${ARGS[@]+"${ARGS[@]}"}
+    ;;
+# Internal/unstable: exists so the smoke tests can drive vise::merge_overrides
+# without a real sync (no Mason/GitHub fetch). First arg is <base.tsv>,
+# second is <overrides.tsv>.
+__merge-overrides)
+    vise::merge_overrides ${ARGS[@]+"${ARGS[@]}"}
     ;;
 *)
     printf 'vise: unknown command: %s\n\n' "$CMD" >&2
