@@ -104,6 +104,9 @@ Not checked: whether a coordinate actually resolves (Mason's `bin` vs. its
 PURL, or `mise ls-remote`) — deciding that needs the network and is a
 separate, opt-in mode.
 
+`mise run test` runs `vise doctor` after the smoke suite, so a broken
+catalog fails the repo's test task even when every smoke assertion passes.
+
 ## Env
 
 - `VISE_DRY_RUN=1` — print mise commands instead of running them.
