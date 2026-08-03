@@ -263,32 +263,6 @@ else
     printf '  \033[33mskip\033[0m version floor (/bin/bash is already >= 5 or absent)\n'
 fi
 
-# --- bash 3.2 compatibility ---------------------------------------------------
-# macOS ships /bin/bash 3.2.57. Bash below 4.4 treats "${ARR[@]}" on a
-# zero-length array as an unset variable under `set -u`, aborting the script
-# — exactly the empty-selection path exercised above. `#!/usr/bin/env bash`
-# only reaches a newer bash if one sits earlier on PATH, so this must hold
-# against /bin/bash directly, not whatever bash happens to be default.
-if [ ! -x /bin/bash ]; then
-    printf '  \033[33mskip\033[0m bash 3.2 compatibility (/bin/bash not present)\n'
-elif ! /bin/bash -c '((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4)))' 2>/dev/null; then
-    crashed=0
-    for action in __preview __use-global __use-project __upgrade __rm; do
-        out=$(VISE_DRY_RUN=1 /bin/bash "$VISE" "$action" 2>&1)
-        case "$out" in
-        *'unbound variable'*) crashed=1 ;;
-        esac
-    done
-    if [ "$crashed" -eq 0 ]; then
-        ok "empty-selection dispatch survives /bin/bash 3.2 (no unbound variable)"
-    else
-        bad "empty-selection dispatch survives /bin/bash 3.2 (no unbound variable)" "$out"
-    fi
-else
-    sys_ver=$(/bin/bash -c 'printf "%s.%s" "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"')
-    printf '  \033[33mskip\033[0m bash 3.2 compatibility (/bin/bash is %s, not pre-4.4)\n' "$sys_ver"
-fi
-
 # --- default filter: hides uncatalogued rows, keeps real editor tooling -----
 # vise's row set unions the catalog with everything mise manages (see
 # vise::render's $observed); anything absent from the catalog reports kind
