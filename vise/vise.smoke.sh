@@ -161,7 +161,7 @@ done
 # 3. control: a real selection must still go through unguarded — without
 # this, a guard that refuses everything would pass the assertions above too.
 out=$(VISE_DRY_RUN=1 bash "$VISE" __upgrade shfmt 2>&1)
-if printf '%s\n' "$out" | grep -qx 'DRY: mise upgrade shfmt'; then
+if printf '%s\n' "$out" | grep -qx 'DRY: mise upgrade -- shfmt'; then
     ok "non-empty upgrade still dry-runs"
 else
     bad "non-empty upgrade still dry-runs" "$out"
@@ -177,13 +177,73 @@ for pair in "__use-global:mise use -g" "__use-project:mise use" "__upgrade:mise 
     out=$(VISE_DRY_RUN=1 bash "$VISE" "$action" good-tool unavailable:some-tool 2>&1)
     rc=$?
     if [ "$rc" -ne 0 ] &&
-        printf '%s\n' "$out" | grep -qx "DRY: $mise_cmd good-tool" &&
+        printf '%s\n' "$out" | grep -qx "DRY: $mise_cmd -- good-tool" &&
         printf '%s\n' "$out" | grep -q 'some-tool has no mise backend'; then
         ok "$action: valid coordinate installs despite an unavailable row in the selection"
     else
         bad "$action: valid coordinate installs despite an unavailable row in the selection" "rc=$rc out=[$out]"
     fi
 done
+
+# --- "--" before coordinates: a coordinate spelled like a flag must not be ---
+# parsed as one. Paired with a fixture coordinate that starts with "-" so
+# these tests would redden without the separator.
+for pair in "__use-global:mise use -g" "__use-project:mise use" "__upgrade:mise upgrade"; do
+    action="${pair%%:*}"
+    mise_cmd="${pair#*:}"
+    out=$(VISE_DRY_RUN=1 bash "$VISE" "$action" -flaglike-coord 2>&1)
+    if printf '%s\n' "$out" | grep -qx "DRY: $mise_cmd -- -flaglike-coord"; then
+        ok "$action: -- separates flags from a coordinate starting with -"
+    else
+        bad "$action: -- separates flags from a coordinate starting with -" "$out"
+    fi
+done
+
+# vise::rm resolves scope via a stubbed `mise config ls --json` (see the
+# batch-removal stub below) rather than VISE_DRY_RUN, so it needs its own
+# fixture rather than reusing the loop above.
+DASH_RM_DIR="$(mktemp -d "$BASE/dash-rm.XXXXXX")"
+DASH_RM_STUB_BIN="$(mktemp -d "$BASE/dash-rm-stubbin.XXXXXX")"
+DASH_RM_GLOBAL_CFG="$DASH_RM_DIR/global-config.toml"
+: >"$DASH_RM_GLOBAL_CFG"
+DASH_RM_CALLS="$DASH_RM_DIR/calls.log"
+: >"$DASH_RM_CALLS"
+cat >"$DASH_RM_STUB_BIN/mise" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >>'$DASH_RM_CALLS'
+if [ "\$1" = "config" ] && [ "\$2" = "ls" ]; then
+    printf '[{"path": "%s", "tools": ["-flaglike-coord"]}]\n' '$DASH_RM_GLOBAL_CFG'
+    exit 0
+fi
+exit 0
+EOF
+chmod +x "$DASH_RM_STUB_BIN/mise"
+(cd "$REPO_ROOT" && PATH="$DASH_RM_STUB_BIN:$PATH" \
+    MISE_GLOBAL_CONFIG_FILE="$DASH_RM_GLOBAL_CFG" \
+    bash "$VISE" __rm -flaglike-coord >/dev/null 2>&1)
+if grep -qx -- 'rm -g -- -flaglike-coord' "$DASH_RM_CALLS"; then
+    ok "__rm: -- separates flags from a coordinate starting with -"
+else
+    bad "__rm: -- separates flags from a coordinate starting with -" "$(cat "$DASH_RM_CALLS")"
+fi
+
+# vise::preview's `mise ls "$coord"` call (plain-text detail pane) needs the
+# same guard; a stub logs its argv to prove the separator reached it.
+DASH_PREVIEW_STUB_BIN="$(mktemp -d "$BASE/dash-preview-stubbin.XXXXXX")"
+DASH_PREVIEW_CALLS="$(mktemp "$BASE/dash-preview-calls.XXXXXX")"
+cat >"$DASH_PREVIEW_STUB_BIN/mise" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >>'$DASH_PREVIEW_CALLS'
+exit 0
+EOF
+chmod +x "$DASH_PREVIEW_STUB_BIN/mise"
+(cd "$REPO_ROOT" && PATH="$DASH_PREVIEW_STUB_BIN:$PATH" \
+    bash "$VISE" __preview -flaglike-coord none name kind lang ver stars - - - >/dev/null 2>&1)
+if grep -qx -- 'ls -- -flaglike-coord' "$DASH_PREVIEW_CALLS"; then
+    ok "__preview: -- separates flags from a coordinate starting with -"
+else
+    bad "__preview: -- separates flags from a coordinate starting with -" "$(cat "$DASH_PREVIEW_CALLS")"
+fi
 
 # --- bash 3.2 compatibility ---------------------------------------------------
 # macOS ships /bin/bash 3.2.57. Bash below 4.4 treats "${ARR[@]}" on a
@@ -376,6 +436,8 @@ else
 fi
 
 # 5. new file: sync's first run on a fresh checkout has no catalog.tsv yet.
+# mktemp's own mode (0600) must not leak through to the renamed file — a
+# fresh catalog.tsv should land at the usual ~0644, not owner-only.
 wa_dest4="$WA_DIR/new.tsv"
 bash "$VISE" __write-atomic "$wa_dest4" printf 'first content\n' >/dev/null 2>&1
 got4="$([ -f "$wa_dest4" ] && cat "$wa_dest4")"
@@ -383,6 +445,35 @@ if [ "$got4" = "first content" ]; then
     ok "write_atomic: creates dest when it doesn't exist yet"
 else
     bad "write_atomic: creates dest when it doesn't exist yet" "$got4"
+fi
+
+mode4=$(stat -f '%Lp' "$wa_dest4" 2>/dev/null || stat -c '%a' "$wa_dest4" 2>/dev/null)
+if [ "$mode4" = "644" ]; then
+    ok "write_atomic: fresh file lands at 644, not mktemp's 600"
+else
+    bad "write_atomic: fresh file lands at 644, not mktemp's 600" "$mode4"
+fi
+
+# 6. trap ordering: `[[ -e "$dest" ]] && mode=$(vise::mode_of "$dest")` runs
+# before the EXIT trap is installed. The right operand of && is NOT
+# set -e-exempt, so a failing mode_of aborts the function before the trap
+# that would clean up the temp file exists — a stubbed `stat` that always
+# fails forces mode_of to fail without needing a real race.
+STAT_FAIL_BIN="$(mktemp -d "$BASE/stat-fail-bin.XXXXXX")"
+cat >"$STAT_FAIL_BIN/stat" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$STAT_FAIL_BIN/stat"
+
+wa_dest5="$WA_DIR/trap-order.tsv"
+printf 'existing content\n' >"$wa_dest5"
+(cd "$REPO_ROOT" && PATH="$STAT_FAIL_BIN:$PATH" bash "$VISE" __write-atomic "$wa_dest5" printf 'new content\n' >/dev/null 2>&1)
+litter5="$(find "$WA_DIR" -maxdepth 1 -name '.vise-*' 2>/dev/null)"
+if [ -z "$litter5" ]; then
+    ok "write_atomic: no leftover temp file when mode_of fails before the trap"
+else
+    bad "write_atomic: no leftover temp file when mode_of fails before the trap" "$litter5"
 fi
 
 # --- partial failure during batch removal: every coordinate is attempted ----
@@ -422,6 +513,7 @@ fi
 if [ "\$1" = "rm" ]; then
     shift
     [ "\$1" = "-g" ] && shift
+    [ "\$1" = "--" ] && shift
     if [ "\$1" = "\$RM_FAIL_COORD" ]; then
         echo "mise: failed to remove \$1" >&2
         exit 1
@@ -437,7 +529,7 @@ rm_out=$(cd "$REPO_ROOT" && PATH="$RM_STUB_BIN:$PATH" \
     bash "$VISE" __rm tool-a tool-b tool-c 2>&1)
 rm_rc=$?
 
-attempted=$(grep -c '^rm -g tool-' "$RM_CALLS")
+attempted=$(grep -c '^rm -g -- tool-' "$RM_CALLS")
 if [ "$attempted" = "3" ]; then
     ok "batch removal: every coordinate attempted despite a mid-batch failure"
 else
@@ -484,7 +576,7 @@ out=$(PATH="$NO_MISE_PATH" VISE_CONFIG_JSON="$SEAM_DIR/config.json" \
     MISE_GLOBAL_CONFIG_FILE="$SEAM_GLOBAL_CFG" VISE_DRY_RUN=1 \
     bash "$VISE" __rm seam-tool 2>&1)
 rc=$?
-if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -qx 'DRY: mise rm -g seam-tool'; then
+if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -qx 'DRY: mise rm -g -- seam-tool'; then
     ok "VISE_CONFIG_JSON stands in for mise config ls --json (no real mise on PATH)"
 else
     bad "VISE_CONFIG_JSON stands in for mise config ls --json (no real mise on PATH)" "rc=$rc out=[$out]"
