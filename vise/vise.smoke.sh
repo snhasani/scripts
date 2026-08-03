@@ -791,6 +791,42 @@ fi
 # real, verified result. Do not assume the PATH-stripping trick above proves
 # __preview is hermetic too — it isn't, and it doesn't.
 
+# --- override merge: seam parity ---------------------------------------------
+# vise::merge_overrides is vise::sync's override-merge step pulled out into
+# its own function, driven here through __merge-overrides instead of a real
+# sync (network, rewrites the committed catalog.tsv). These two cases are the
+# shapes the merge has always handled: an override matching an existing row
+# by name rewrites that row, and an override matching nothing appends as a
+# synthetic row with metadata columns "-". A pass-through row (no matching
+# override at all) must survive untouched.
+MERGE_DIR="$(mktemp -d "$BASE/merge-seam.XXXXXX")"
+MERGE_BASE="$MERGE_DIR/base.tsv"
+cat >"$MERGE_BASE" <<'EOF'
+npm:old-coord	renamed-tool	linter	javascript	https://example.com/old	10	2026-01-01	Old description
+npm:untouched	untouched-tool	linter	javascript	https://example.com/untouched	5	2026-01-01	Untouched
+EOF
+MERGE_OVERRIDES="$MERGE_DIR/overrides.tsv"
+cat >"$MERGE_OVERRIDES" <<'EOF'
+npm:new-coord	renamed-tool	lsp	typescript
+dotnet:brand-new	brand-new-tool	lsp	csharp
+EOF
+merge_out=$(bash "$VISE" __merge-overrides "$MERGE_BASE" "$MERGE_OVERRIDES" 2>&1)
+if printf '%s\n' "$merge_out" | grep -qx $'npm:new-coord\trenamed-tool\tlsp\ttypescript\thttps://example.com/old\t10\t2026-01-01\tOld description'; then
+    ok "merge seam: override matching an existing row's name rewrites it in place"
+else
+    bad "merge seam: override matching an existing row's name rewrites it in place" "$merge_out"
+fi
+if printf '%s\n' "$merge_out" | grep -qx $'dotnet:brand-new\tbrand-new-tool\tlsp\tcsharp\t-\t-\t-\t-'; then
+    ok "merge seam: override matching nothing appends as a synthetic row"
+else
+    bad "merge seam: override matching nothing appends as a synthetic row" "$merge_out"
+fi
+if printf '%s\n' "$merge_out" | grep -qx $'npm:untouched\tuntouched-tool\tlinter\tjavascript\thttps://example.com/untouched\t5\t2026-01-01\tUntouched'; then
+    ok "merge seam: a row with no matching override passes through unchanged"
+else
+    bad "merge seam: a row with no matching override passes through unchanged" "$merge_out"
+fi
+
 # --- vise doctor: offline lint over catalog.tsv --------------------------
 # Every fixture below is self-contained (own catalog, own registry, own
 # overrides) so a check's test can never pass by accident from repo state:
