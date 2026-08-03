@@ -887,6 +887,36 @@ vise::doctor_wrongly_excluded() {
     return "$rc"
 }
 
+# vise::sync merges catalog-overrides.tsv onto the Mason-derived base by
+# name (see vise::sync's awk block). An override whose name matches nothing
+# there becomes a synthetic row instead of a merge: coordinate/kind/language
+# from the override, but homepage and description both stamped "-" (its
+# END block). That shape — override's own coord/kind/lang paired with
+# "-"/"-" in homepage/description — is the only offline signal a dead
+# override leaves behind.
+vise::doctor_dead_override() {
+    local catalog="$1" overrides="$2"
+    [[ -r "$overrides" ]] || return 0
+    awk -F'\t' -v overrides="$overrides" '
+        BEGIN {
+            while ((getline line < overrides) > 0) {
+                if (line ~ /^[[:space:]]*(#|$)/) continue
+                split(line, f, "\t")
+                if (f[2] == "") continue
+                coord[f[2]] = f[1]; kind[f[2]] = f[3]; lang[f[2]] = f[4]
+            }
+        }
+        !/^[[:space:]]*(#|$)/ {
+            if ($2 in coord && $1 == coord[$2] && $3 == kind[$2] && $4 == lang[$2] &&
+                $5 == "-" && $8 == "-") {
+                printf "vise: doctor: dead override: %s (%s) matched nothing, became a synthetic row with no metadata\n", $2, $1
+                bad = 1
+            }
+        }
+        END { exit bad }
+    ' "$catalog"
+}
+
 vise::doctor() {
     local catalog="$CATALOG_FILE" rc=0
     if [[ ! -r "$catalog" ]]; then
@@ -908,6 +938,7 @@ vise::doctor() {
     vise::doctor_dup_name "$catalog" || rc=1
     vise::doctor_dead_shorthand "$catalog" "$shorts" || rc=1
     vise::doctor_wrongly_excluded "$catalog" "$shorts" || rc=1
+    vise::doctor_dead_override "$catalog" "$OVERRIDES_FILE" || rc=1
 
     return "$rc"
 }
