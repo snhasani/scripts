@@ -614,7 +614,7 @@ vise::write_atomic() {
     prev_trap=$(trap -p EXIT)
     # $tmp is expanded NOW, not deferred: a local var doesn't survive into the
     # trap's execution context if set -e tears down this function's frame
-    # abnormally (e.g. mode_of failing below) — a deferred '"'"'$tmp'"'"' would
+    # abnormally (e.g. mode_of failing below) — a deferred '$tmp' would
     # then hit set -u's unbound-variable error instead of running the cleanup.
     # shellcheck disable=SC2064 # deliberately eager: see comment above
     trap "rm -f '$tmp'" EXIT
