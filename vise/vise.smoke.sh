@@ -870,5 +870,29 @@ else
     bad "doctor: duplicate name catches two coordinates sharing one name" "rc=$rc out=[$out]"
 fi
 
+# 5. dead shorthand: a bare coordinate (no backend prefix) only resolves if
+# mise's own registry recognizes it as a shorthand. registry.json here is a
+# small filtered subset (per the seam's convention), not a real dump.
+SHORTHAND_DIR="$(mktemp -d "$DOCTOR_DIR/shorthand.XXXXXX")"
+SHORTHAND_CATALOG="$SHORTHAND_DIR/catalog.tsv"
+cat >"$SHORTHAND_CATALOG" <<'EOF'
+gofumpt	gofumpt	formatter	go	-	-	-	-
+nonexistent-tool	nonexistent-tool	linter	misc	-	-	-	-
+EOF
+SHORTHAND_REGISTRY="$SHORTHAND_DIR/registry.json"
+cat >"$SHORTHAND_REGISTRY" <<'EOF'
+[{"short": "gofumpt", "backends": ["go:mvdan.cc/gofumpt/cmd/gofumpt"], "description": "A stricter gofmt"}]
+EOF
+out=$(VISE_CATALOG="$SHORTHAND_CATALOG" VISE_REGISTRY_JSON="$SHORTHAND_REGISTRY" \
+    VISE_OVERRIDES="$DOCTOR_EMPTY_OVERRIDES" bash "$VISE" doctor 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q 'dead shorthand' &&
+    printf '%s\n' "$out" | grep -q 'nonexistent-tool' &&
+    ! printf '%s\n' "$out" | grep -q 'gofumpt'; then
+    ok "doctor: dead shorthand catches a bare coordinate absent from the registry"
+else
+    bad "doctor: dead shorthand catches a bare coordinate absent from the registry" "rc=$rc out=[$out]"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
