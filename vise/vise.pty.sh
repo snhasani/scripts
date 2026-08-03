@@ -88,12 +88,18 @@ VISE="${1:-$(cd "$(dirname "$0")" && pwd)/vise}"
     exit 2
 }
 
+# Missing tmux/fzf is a quiet local skip (this suite is opt-in, see the file
+# header), but the same silence in CI is a green run that tested nothing —
+# CI is set by every GitHub Actions runner, so it's a reliable signal to turn
+# the skip into a hard failure there instead.
 if ! command -v tmux >/dev/null 2>&1; then
-    printf 'tmux not found on PATH — pty suite cannot run, skipping\n' >&2
+    printf 'tmux not found on PATH — pty suite cannot run\n' >&2
+    [ -n "${CI:-}" ] && exit 1
     exit 0
 fi
 if ! command -v fzf >/dev/null 2>&1; then
-    printf 'fzf not found on PATH — pty suite cannot run, skipping\n' >&2
+    printf 'fzf not found on PATH — pty suite cannot run\n' >&2
+    [ -n "${CI:-}" ] && exit 1
     exit 0
 fi
 
