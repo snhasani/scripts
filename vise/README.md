@@ -116,13 +116,20 @@ prompt()` chaining were never exercised end-to-end — exactly where the
 empty-selection bulk-upgrade bug lived. `vise.pty.sh` opens the real picker
 inside a real `tmux` pty and presses keys.
 
-Covered, each with a killed mutant: `ctrl-a`, `ctrl-s`, `ctrl-o`, `ctrl-r`.
-NOT covered: `ctrl-g`/`ctrl-t`/`ctrl-x`/`ctrl-u` — see the file's header
-comment for why (in short: their `execute()` bodies end in a blocking
-`read -r -p "Press enter to continue..."`, and under `VISE_DRY_RUN=1` the
-whole execute-then-reload cycle completes faster than tmux's pty parser
-produces an externally observable intermediate frame — confirmed
-deterministic, not flaky, across dozens of trials).
+Covered, each with a killed mutant: `ctrl-a`, `ctrl-s`, `ctrl-o`, `ctrl-r`,
+`ctrl-g`, `ctrl-t`, `ctrl-x`, `ctrl-u`. The last four's post-action pause
+(the `read` that holds mise's output on screen — see "Keys" above) used to
+never actually pause: fzf runs `execute()` via `$SHELL -c`, and under a zsh
+login shell `read -p` means "read from a coprocess", not "print a prompt",
+so it errored and returned instantly regardless of stdin — and even under
+bash, `execute()`'s child inherits fzf's own stdin, which is the pipe
+`vise::render` feeds fzf, already at EOF. Both are fixed by routing the pause
+through a real `__pause` subcommand (always runs under vise's own bash, and
+reads `</dev/tty`) instead of inlining `read` in the bind string. See the
+file's header comment for the full trail, including why `ctrl-u` on a
+zero-match filter still can't be driven through the exact code path
+originally expected (fzf itself now skips that execute() outright — a
+stronger guarantee, verified live, than the one the bug report assumed).
 
 Not run by `mise run test` — starts a real fzf per case, an order of
 magnitude slower than the rest of the suite, and needs `tmux` + `fzf`
