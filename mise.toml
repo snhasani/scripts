@@ -31,7 +31,7 @@ printf '%s\n' "$files" | {
 '''
 
 [tasks.test]
-description = "Run every *.smoke.sh with bash"
+description = "Run every *.smoke.sh with bash, plus vise doctor's offline catalog lint"
 run = '''
 find . -name '*.smoke.sh' -not -path './.git/*' -not -path './bin/*' -print | sort | {
 	rc=0
@@ -44,4 +44,11 @@ find . -name '*.smoke.sh' -not -path './.git/*' -not -path './bin/*' -print | so
 	[ "$found" -eq 1 ] || echo "no smoke tests found"
 	exit "$rc"
 }
+smoke_rc=$?
+
+echo "== vise doctor =="
+bash vise/vise doctor
+doctor_rc=$?
+
+[ "$smoke_rc" -eq 0 ] && [ "$doctor_rc" -eq 0 ]
 '''
