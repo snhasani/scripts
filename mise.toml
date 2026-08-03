@@ -52,3 +52,10 @@ doctor_rc=$?
 
 [ "$smoke_rc" -eq 0 ] && [ "$doctor_rc" -eq 0 ]
 '''
+
+# Not part of [tasks.test]: starts a real fzf inside a real tmux pty per case,
+# an order of magnitude slower than the hermetic suite above and dependent on
+# tmux/fzf being installed. Opt in explicitly with `mise run test-pty`.
+[tasks.test-pty]
+description = "Drive vise's fzf key bindings through a real pty (tmux). Slower, needs tmux+fzf; not run by `mise run test`."
+run = "bash vise/vise.pty.sh"
