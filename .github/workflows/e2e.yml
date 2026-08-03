@@ -1,0 +1,61 @@
+name: e2e
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pty:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # execute() runs its command via "$SHELL -c" (fzf(1), COMMAND EXECUTION)
+        # — the pause bug fixed in 90acac4 was zsh-specific (zsh's `read -p`
+        # means "read from a coprocess", not "print a prompt"), so both
+        # shells actually in use need their own run, not just bash's.
+        shell: ["/bin/bash", "/usr/bin/zsh"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # dorny/paths-filter diffs against github.event.before on a push
+          # trigger, which needs that commit present locally — the default
+          # depth-1 checkout doesn't have it.
+          fetch-depth: 2
+          persist-credentials: false
+
+      # A path filter STEP, not `on.pull_request.paths`: the latter reports
+      # the whole job as skipped when nothing matches, which permanently
+      # blocks a PR if this job is ever made a required check. This way the
+      # job always runs and reports success; only the real work below it is
+      # conditional.
+      - name: Filter paths
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            pty:
+              - 'vise/vise'
+              - 'vise/*.pty.sh'
+              - 'mise.toml'
+              - '.github/workflows/e2e.yml'
+
+      - name: Install tmux, fzf, zsh
+        if: steps.filter.outputs.pty == 'true'
+        run: sudo apt-get update && sudo apt-get install -y tmux fzf zsh
+
+      - name: Provision pinned tools
+        if: steps.filter.outputs.pty == 'true'
+        uses: jdx/mise-action@v4
+        with:
+          install: true
+
+      - name: PTY suite (SHELL=${{ matrix.shell }})
+        if: steps.filter.outputs.pty == 'true'
+        env:
+          SHELL: ${{ matrix.shell }}
+        run: mise run test-pty
