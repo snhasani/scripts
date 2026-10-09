@@ -8,6 +8,7 @@ lefthook = "2.1.10"
 # depends on that flag, so "whatever apt has" was never a sound contract.
 "aqua:junegunn/fzf" = "0.74.2"
 "aqua:tmux/tmux-builds" = "3.7b"
+actionlint = "1.7.12"
 
 # Shell scripts are found by shfmt itself (shebang + *.sh), never hand-listed, so
 # a new tool needs no wiring here. bin/ holds only PATH symlinks to entrypoints —
