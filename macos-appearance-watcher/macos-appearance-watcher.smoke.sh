@@ -37,11 +37,17 @@ trap 'rm -rf "$base"' EXIT
 
 printf 'smoke: %s\n' "$WATCHER"
 
-# Isolate the state file from the real ~/.local/state/appearance - the tmux
-# push is skipped whenever `tmux list-sessions` fails, which it will here since
-# TMUX_BIN still resolves to the real binary but there's no reason to assume
-# (or require) a session exists in this environment.
-run() { XDG_STATE_HOME="$base/state" "$WATCHER" "$@"; }
+# Isolate the state file from the real ~/.local/state/appearance, and tmux from
+# the developer's running server. The watcher skips its tmux push whenever
+# `tmux list-sessions` fails. TMUX_BIN is the real binary, so without isolation
+# that call reaches a running server and the test switches the real theme.
+# tmux finds its server through $TMUX, else the socket dir $TMUX_TMPDIR:
+# clearing the first and pointing the second at an empty dir means no server.
+mkdir -p "$base/tmux"
+run() {
+    env -u TMUX TMUX_TMPDIR="$base/tmux" XDG_STATE_HOME="$base/state" \
+        "$WATCHER" "$@"
+}
 
 # 1. "light" resolves to Light and writes the state file
 run light >/dev/null
