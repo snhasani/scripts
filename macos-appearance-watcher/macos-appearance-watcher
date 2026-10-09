@@ -5,9 +5,12 @@
 # reports the current mode immediately on start, not just on future changes, so a
 # session that missed a live transition self-corrects as soon as the watcher (re)starts.
 #
-# Pushes tmux's theme option directly (server-wide) instead of relying on tmux's own
+# Switches tmux's theme server-wide instead of relying only on tmux's own
 # client-light-theme/client-dark-theme hooks, which only fire for a client attached
 # and subscribed at the moment of a live transition - anything else misses it.
+# It calls the same theme-apply.sh as those hooks: that script rebuilds once per
+# switch and skips callers that arrive after the work is done, so the watcher and
+# the hooks together still give a single rebuild.
 #
 # LaunchAgents run with a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin), so brew-installed
 # binaries are resolved via known prefixes rather than PATH lookup. $HOME is reliably set
@@ -29,7 +32,7 @@ find_bin() {
 TMUX_BIN="$(find_bin tmux)"
 DARK_NOTIFY_BIN="$(find_bin dark-notify)"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/appearance"
-TMUX_PLUGIN="${XDG_CONFIG_HOME:-$HOME/.config}/tmux/plugins/tokyo-night-tmux/tokyo-night.tmux"
+THEME_APPLY="${XDG_CONFIG_HOME:-$HOME/.config}/tmux/theme-apply.sh"
 
 check_deps() {
     ok=0
@@ -68,8 +71,9 @@ if [ -n "$TMUX_BIN" ]; then
     if "$TMUX_BIN" list-sessions >/dev/null 2>&1; then
         variant=night
         [ "$scheme" = "Light" ] && variant=day
-        "$TMUX_BIN" set -g @tokyo-night-tmux_theme "$variant"
-        "$TMUX_BIN" run-shell "$TMUX_PLUGIN"
+        # run-shell gives the script tmux's own PATH, which this LaunchAgent lacks.
+        # -b returns at once, so no waiting tmux client lingers.
+        "$TMUX_BIN" run-shell -b "$THEME_APPLY $variant"
     fi
 else
     echo "macos-appearance-watcher: tmux not found - install with: brew install tmux" >&2
